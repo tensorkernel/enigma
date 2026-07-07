@@ -1,124 +1,89 @@
-name: RDP ARM64
-
-on:
-  workflow_dispatch:
-
-jobs:
-  secure-rdp:
-    runs-on: windows-11-arm
-    timeout-minutes: 360
-
-    steps:
-      - name: Configure Core RDP Settings
-        shell: powershell
-        run: |
-          # Enable Remote Desktop and disable Network Level Authentication if needed
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
-
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
-
-          Restart-Service -Name TermService -Force
-
-      - name: Create RDP User with Secure Password
-        shell: powershell
-        run: |
-          Add-Type -AssemblyName System.Security
-
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126))
-          }
-
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-
-          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
-
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
-
       - name: Install Tailscale ARM64
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.98.8-arm64.msi"
           $installerPath = "$env:TEMP\tailscale-arm64.msi"
+          $logPath = "$env:TEMP\tailscale-install.log"
 
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+
+          Start-Process msiexec.exe `
+            -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart", "/L*v", "`"$logPath`"" `
+            -Wait
+
           Remove-Item $installerPath -Force
+
+          Write-Host "Tailscale install log:"
+          Get-Content $logPath -Tail 80
+
+          Get-Service Tailscale* | Format-Table -AutoSize
 
       - name: Establish Tailscale Connection
         shell: powershell
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
-            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-            --hostname=gh-arm64-runner-$env:GITHUB_RUN_ID
+          $ErrorActionPreference = "Stop"
+
+          if (-not "${{ secrets.TAILSCALE_AUTH_KEY }}") {
+              Write-Error "TAILSCALE_AUTH_KEY secret is empty or missing"
+              exit 1
+          }
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscale)) {
+              $tailscale = "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
+          }
+
+          if (-not (Test-Path $tailscale)) {
+              Write-Error "tailscale.exe not found"
+              exit 1
+          }
+
+          Write-Host "Using Tailscale binary: $tailscale"
+
+          $svc = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          if ($svc) {
+              Start-Service Tailscale -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 5
+          }
+
+          & $tailscale version
+
+          & $tailscale up `
+            --auth-key="${{ secrets.TAILSCALE_AUTH_KEY }}" `
+            --hostname="gh-arm64-runner-$env:GITHUB_RUN_ID" `
+            --unattended=true `
+            --accept-dns=false
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "tailscale up failed with exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+          }
 
           $tsIP = $null
-          $retries = 0
 
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          for ($i = 1; $i -le 30; $i++) {
+              Write-Host "Waiting for Tailscale IP... attempt $i/30"
+
+              & $tailscale status
+
+              $tsIP = (& $tailscale ip -4) | Select-Object -First 1
+
+              if ($tsIP) {
+                  break
+              }
+
               Start-Sleep -Seconds 5
-              $retries++
           }
 
           if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+              Write-Host "Final Tailscale status:"
+              & $tailscale status
+              Write-Error "Tailscale IP not assigned. Check auth key, ACL/tag permissions, and install logs."
               exit 1
           }
 
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      - name: Verify RDP Accessibility
-        shell: powershell
-        run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-
-          Write-Host "TCP connectivity successful!"
-
-      - name: Maintain Connection
-        shell: powershell
-        run: |
-          Write-Host "`n=== RDP ACCESS ARM64 ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $env:RDP_CREDS"
-          Write-Host "========================`n"
-
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - cancel workflow to terminate"
-              Start-Sleep -Seconds 300
-          }
+          Write-Host "Tailscale IP assigned: $tsIP"
