@@ -1,4 +1,4 @@
-      - name: Install Tailscale ARM64
+ name: Install Tailscale ARM64
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
