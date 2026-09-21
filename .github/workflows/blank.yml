@@ -1,56 +1,102 @@
-name: Ubuntu LXDE RDP
+name: Ubuntu Workstation RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp:
+  workstation:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
     steps:
 
-      # =========================================================
-      # SYSTEM INFORMATION
-      # =========================================================
-      - name: System Information
+      # ============================================================
+      # 1. INSPECT THE GITHUB RUNNER
+      # ============================================================
+      - name: Inspect Runner
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "=== OS ==="
+          echo "=================================================="
+          echo "OPERATING SYSTEM"
+          echo "=================================================="
           cat /etc/os-release
 
           echo
-          echo "=== KERNEL ==="
+          echo "=================================================="
+          echo "KERNEL"
+          echo "=================================================="
           uname -a
 
           echo
-          echo "=== CPU ==="
-          nproc
+          echo "=================================================="
+          echo "ARCHITECTURE"
+          echo "=================================================="
+          uname -m
+          dpkg --print-architecture
 
           echo
-          echo "=== MEMORY ==="
+          echo "=================================================="
+          echo "CPU"
+          echo "=================================================="
+          nproc
+          lscpu | sed -n '1,25p'
+
+          echo
+          echo "=================================================="
+          echo "MEMORY"
+          echo "=================================================="
           free -h
 
           echo
-          echo "=== DISK ==="
-          df -h /
+          echo "=================================================="
+          echo "DISK"
+          echo "=================================================="
+          df -h
 
-      # =========================================================
-      # INSTALL LXDE + XRDP
-      # =========================================================
-      - name: Install LXDE and xRDP
+          echo
+          echo "=================================================="
+          echo "PCI DEVICES"
+          echo "=================================================="
+          lspci || true
+
+      # ============================================================
+      # 2. UPDATE APT
+      # ============================================================
+      - name: Prepare APT
         shell: bash
         run: |
           set -euxo pipefail
 
           export DEBIAN_FRONTEND=noninteractive
 
+          sudo dpkg --configure -a || true
+
           sudo apt-get update
+
+          sudo apt-get \
+            -y \
+            --fix-broken \
+            install
+
+      # ============================================================
+      # 3. LIGHTWEIGHT DESKTOP + XORG + XRDP
+      #
+      # LXDE/Openbox is deliberately used instead of GNOME.
+      # It avoids the GNOME/Wayland/X11 session problems encountered
+      # in the earlier workflow.
+      # ============================================================
+      - name: Install Desktop and RDP Stack
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
 
           sudo apt-get install -y \
             lxde-core \
+            openbox \
             openbox-lxde-session \
             lxsession \
             lxpanel \
@@ -58,39 +104,418 @@ jobs:
             lxterminal \
             lxappearance \
             lxpolkit \
-            openbox \
-            xrdp \
+            polkitd \
+            xorg \
+            xserver-xorg-core \
+            xserver-xorg-input-all \
+            xserver-xorg-video-all \
             xorgxrdp \
-            dbus-x11 \
-            dbus-user-session \
+            xrdp \
             xauth \
             x11-xserver-utils \
-            curl \
-            ca-certificates \
-            netcat-openbsd \
-            ufw
+            x11-utils \
+            x11-apps \
+            dbus \
+            dbus-x11 \
+            dbus-user-session \
+            libpam-systemd \
+            xdg-utils \
+            xdg-user-dirs \
+            desktop-file-utils \
+            shared-mime-info
 
           sudo apt-get install -f -y
 
           echo
-          echo "=== XRDP VERSION ==="
-          xrdp --version || true
+          echo "LXDE:"
+          command -v startlxde
 
           echo
-          echo "=== LXSESSION ==="
-          lxsession --version || true
+          echo "Openbox:"
+          command -v openbox
 
           echo
-          echo "=== X11 SESSIONS ==="
-          ls -la /usr/share/xsessions/
+          echo "xrdp:"
+          command -v xrdp
 
-      # =========================================================
-      # CREATE RDP USER
-      # =========================================================
+          echo
+          echo "xorgxrdp:"
+          dpkg-query -W xorgxrdp
+
+      # ============================================================
+      # 4. DESKTOP INTEGRATION
+      # ============================================================
+      - name: Install Desktop Integration
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get install -y \
+            xdg-desktop-portal \
+            xdg-desktop-portal-gtk \
+            gvfs \
+            gvfs-backends \
+            udisks2 \
+            file-roller \
+            gnome-keyring \
+            libsecret-1-0 \
+            seahorse \
+            dconf-cli \
+            gsettings-desktop-schemas \
+            xclip \
+            xsel
+
+      # ============================================================
+      # 5. ELECTRON / CHROMIUM / DESKTOP APP RUNTIMES
+      # ============================================================
+      - name: Install Desktop App Runtime Libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get install -y \
+            libnss3 \
+            libnspr4 \
+            libatk1.0-0t64 \
+            libatk-bridge2.0-0t64 \
+            libcups2t64 \
+            libgtk-3-0t64 \
+            libgtk-4-1 \
+            libgdk-pixbuf-2.0-0 \
+            libdrm2 \
+            libgbm1 \
+            libx11-6 \
+            libx11-xcb1 \
+            libxcb1 \
+            libxcb-dri3-0 \
+            libxcb-shm0 \
+            libxcb-render0 \
+            libxcb-xfixes0 \
+            libxcb-randr0 \
+            libxcb-keysyms1 \
+            libxcb-util1 \
+            libxcb-image0 \
+            libxcb-icccm4 \
+            libxcb-sync1 \
+            libxcb-xkb1 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libxss1 \
+            libxtst6 \
+            libxkbcommon0 \
+            libxkbcommon-x11-0 \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libpangoft2-1.0-0 \
+            libfontconfig1 \
+            libfreetype6 \
+            libexpat1 \
+            libnotify4 \
+            libglib2.0-0t64 \
+            libdbus-1-3 \
+            libatomic1 \
+            libcurl4 \
+            libssl3t64 \
+            libfuse2t64
+
+      # ============================================================
+      # 6. GRAPHICS USERSPACE
+      #
+      # GitHub's VM does not provide a physical NVIDIA/AMD GPU that
+      # we should replace with a custom kernel driver. Install the
+      # Mesa/X11/Vulkan userspace stack instead.
+      # ============================================================
+      - name: Install Graphics and Video Stack
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get install -y \
+            mesa-utils \
+            mesa-utils-extra \
+            mesa-vulkan-drivers \
+            libgl1 \
+            libegl1 \
+            libgles2 \
+            libgbm1 \
+            libdrm2 \
+            libglx-mesa0 \
+            libgl1-mesa-dri \
+            libegl-mesa0 \
+            libva2 \
+            libva-drm2 \
+            libva-x11-2 \
+            mesa-va-drivers \
+            vainfo \
+            vulkan-tools \
+            libvulkan1
+
+          echo
+          echo "=== OpenGL ==="
+          glxinfo -B || true
+
+          echo
+          echo "=== Vulkan ==="
+          vulkaninfo --summary || true
+
+          echo
+          echo "=== VA-API ==="
+          vainfo || true
+
+      # ============================================================
+      # 7. AUDIO / MULTIMEDIA
+      # ============================================================
+      - name: Install Audio and Multimedia
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get install -y \
+            pipewire \
+            pipewire-audio \
+            pipewire-pulse \
+            pipewire-alsa \
+            pipewire-jack \
+            pipewire-module-xrdp \
+            wireplumber \
+            pavucontrol \
+            alsa-utils \
+            pulseaudio-utils \
+            libasound2t64 \
+            libasound2-plugins \
+            ffmpeg \
+            v4l-utils \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav
+
+      # ============================================================
+      # 8. FONTS / LOCALE
+      # ============================================================
+      - name: Configure Fonts and Locale
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get install -y \
+            locales \
+            fonts-noto-core \
+            fonts-noto-cjk \
+            fonts-noto-color-emoji \
+            fonts-dejavu \
+            fonts-liberation \
+            fonts-urw-base35
+
+          sudo sed -i \
+            's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
+            /etc/locale.gen
+
+          sudo locale-gen en_US.UTF-8
+
+          sudo update-locale \
+            LANG=en_US.UTF-8 \
+            LANGUAGE=en_US:en \
+            LC_ALL=en_US.UTF-8
+
+          sudo fc-cache -f
+
+      # ============================================================
+      # 9. GENERAL DEVELOPMENT / SYSTEM UTILITIES
+      # ============================================================
+      - name: Install Developer Utilities
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get install -y \
+            build-essential \
+            gcc \
+            g++ \
+            make \
+            cmake \
+            ninja-build \
+            pkg-config \
+            autoconf \
+            automake \
+            libtool \
+            clang \
+            lldb \
+            gdb \
+            valgrind \
+            strace \
+            ltrace \
+            git \
+            git-lfs \
+            openssh-client \
+            rsync \
+            tmux \
+            screen \
+            htop \
+            btop \
+            tree \
+            ripgrep \
+            fd-find \
+            fzf \
+            jq \
+            yq \
+            wget \
+            curl \
+            aria2 \
+            unzip \
+            zip \
+            p7zip-full \
+            xz-utils \
+            zstd \
+            lz4 \
+            bzip2 \
+            gzip \
+            tar \
+            patch \
+            diffutils \
+            shellcheck \
+            direnv \
+            socat \
+            net-tools \
+            iproute2 \
+            iputils-ping \
+            dnsutils \
+            netcat-openbsd \
+            traceroute \
+            vim \
+            neovim \
+            nano
+
+          git lfs install --system || true
+
+      # ============================================================
+      # 10. PYTHON
+      # ============================================================
+      - name: Prepare Python
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get install -y \
+            python3 \
+            python3-dev \
+            python3-pip \
+            python3-venv \
+            python3-setuptools \
+            python3-wheel \
+            python-is-python3
+
+          python3 --version
+          python3 -m pip --version
+
+      # ============================================================
+      # 11. NODE / JAVASCRIPT
+      #
+      # GitHub's Ubuntu image already includes Node/npm and many
+      # runtimes. Add pnpm/bun while preserving the baked-in tools.
+      # ============================================================
+      - name: Prepare Node Environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          node --version
+          npm --version
+
+          sudo npm install -g pnpm bun
+
+          echo
+          echo "pnpm:"
+          pnpm --version
+
+          echo
+          echo "bun:"
+          bun --version
+
+      # ============================================================
+      # 12. DOCKER
+      #
+      # Docker is normally already present on GitHub's Ubuntu image.
+      # Only install the distro package if it is absent.
+      # ============================================================
+      - name: Prepare Docker
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if ! command -v docker >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            sudo apt-get install -y docker.io
+          fi
+
+          docker --version
+
+          if getent group docker >/dev/null 2>&1; then
+            echo "Docker group exists."
+          fi
+
+      # ============================================================
+      # 13. CODE / GITHUB CLI VALIDATION
+      # ============================================================
+      - name: Validate Built In Developer Tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Git:"
+          git --version
+
+          echo
+          echo "GitHub CLI:"
+          gh --version | head -n 1 || true
+
+          echo
+          echo "Node:"
+          node --version
+
+          echo
+          echo "Python:"
+          python3 --version
+
+          echo
+          echo "Docker:"
+          docker --version
+
+          echo
+          echo "Browser binaries:"
+          google-chrome --version || true
+          chromium --version || true
+          firefox --version || true
+
+          echo
+          echo "Web drivers:"
+          chromedriver --version || true
+          geckodriver --version || true
+
+      # ============================================================
+      # 14. CREATE RDP USER
+      # ============================================================
       - name: Create RDP User
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           USERNAME="RDP"
           PASSWORD="admin"
@@ -102,59 +527,190 @@ jobs:
               "$USERNAME"
           fi
 
-          # Set requested fixed password.
+          # Fixed password requested.
           echo "$USERNAME:$PASSWORD" | sudo chpasswd
 
-          # Give the RDP account sudo/admin access.
+          # Do not expire this temporary runner account.
+          sudo chage -M -1 "$USERNAME"
+          sudo chage -E -1 "$USERNAME"
+
+          # Administrative access.
           sudo usermod -aG sudo "$USERNAME"
 
-          # Allow xrdp to access its certificate.
+          # xrdp certificate access.
           sudo usermod -aG ssl-cert xrdp
 
-          # Make absolutely sure the home directory is owned correctly.
-          sudo mkdir -p "/home/$USERNAME"
-          sudo chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
+          # Useful device/application groups if provided by the runner.
+          for GROUP in \
+            audio \
+            video \
+            render \
+            input \
+            plugdev \
+            dialout \
+            netdev \
+            docker; do
 
-          echo "RDP_USER=$USERNAME" >> "$GITHUB_ENV"
-          echo "RDP_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+            if getent group "$GROUP" >/dev/null 2>&1; then
+              sudo usermod -aG "$GROUP" "$USERNAME"
+            fi
+          done
+
+          # Passwordless sudo for this ephemeral workstation.
+          sudo tee /etc/sudoers.d/RDP >/dev/null <<'EOF'
+          RDP ALL=(ALL) NOPASSWD:ALL
+          EOF
+
+          sudo chmod 0440 /etc/sudoers.d/RDP
+          sudo visudo -cf /etc/sudoers.d/RDP
+
+          # Keep systemd user services alive where supported.
+          sudo loginctl enable-linger "$USERNAME" || true
 
           echo
-          echo "RDP user created."
-          echo "Username: $USERNAME"
+          echo "=== RDP USER ==="
+          id "$USERNAME"
 
-      # =========================================================
-      # CONFIGURE LXDE SESSION
-      # =========================================================
-      - name: Configure LXDE Session
+      # ============================================================
+      # 15. CREATE DIRECTORY STRUCTURE
+      # ============================================================
+      - name: Create Workstation Paths
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           USERNAME="RDP"
           HOME_DIR="/home/$USERNAME"
 
-          # Create a clean X11/LXDE session.
+          sudo mkdir -p \
+            "$HOME_DIR/Desktop" \
+            "$HOME_DIR/Documents" \
+            "$HOME_DIR/Downloads" \
+            "$HOME_DIR/Pictures" \
+            "$HOME_DIR/Videos" \
+            "$HOME_DIR/Music" \
+            "$HOME_DIR/Projects" \
+            "$HOME_DIR/Code" \
+            "$HOME_DIR/Work" \
+            "$HOME_DIR/Scratch" \
+            "$HOME_DIR/.local/bin" \
+            "$HOME_DIR/.local/share" \
+            "$HOME_DIR/.config" \
+            "$HOME_DIR/.cache" \
+            "$HOME_DIR/.codex" \
+            "$HOME_DIR/.npm" \
+            "$HOME_DIR/.cache/pip" \
+            "$HOME_DIR/.cache/codex" \
+            /workspace \
+            /opt/apps \
+            /opt/tools
+
+          sudo chown -R \
+            "$USERNAME:$USERNAME" \
+            "$HOME_DIR"
+
+          sudo chown \
+            "$USERNAME:$USERNAME" \
+            /workspace
+
+          sudo chmod 0755 \
+            /workspace \
+            /opt/apps \
+            /opt/tools
+
+          sudo -u "$USERNAME" ln -sfn \
+            /workspace \
+            "$HOME_DIR/workspace"
+
+          sudo -u "$USERNAME" \
+            env HOME="$HOME_DIR" \
+            xdg-user-dirs-update || true
+
+          echo
+          echo "=== WORKSPACE ==="
+          ls -la "$HOME_DIR"
+          ls -ld /workspace
+
+      # ============================================================
+      # 16. USER ENVIRONMENT
+      # ============================================================
+      - name: Configure User Environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          USERNAME="RDP"
+          HOME_DIR="/home/$USERNAME"
+
+          sudo -u "$USERNAME" tee "$HOME_DIR/.bashrc" >/dev/null <<'EOF'
+          # Workstation environment
+
+          export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$PATH"
+
+          export WORKSPACE="/workspace"
+          export PROJECTS="$HOME/Projects"
+          export CODE="$HOME/Code"
+
+          export CODEX_HOME="$HOME/.codex"
+
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export XDG_CACHE_HOME="$HOME/.cache"
+          export XDG_DATA_HOME="$HOME/.local/share"
+
+          export EDITOR="${EDITOR:-nano}"
+          export VISUAL="${VISUAL:-nano}"
+
+          alias ll='ls -lah'
+          alias la='ls -A'
+          alias l='ls -CF'
+
+          if command -v fdfind >/dev/null 2>&1; then
+            alias fd='fdfind'
+          fi
+          EOF
+
+          sudo chown \
+            "$USERNAME:$USERNAME" \
+            "$HOME_DIR/.bashrc"
+
+          sudo -u "$USERNAME" tee "$HOME_DIR/.profile" >/dev/null <<'EOF'
+          export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$PATH"
+
+          export WORKSPACE="/workspace"
+          export PROJECTS="$HOME/Projects"
+          export CODE="$HOME/Code"
+          export CODEX_HOME="$HOME/.codex"
+
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export XDG_CACHE_HOME="$HOME/.cache"
+          export XDG_DATA_HOME="$HOME/.local/share"
+
+          # xrdp uses X11.
+          export XDG_SESSION_TYPE=x11
+          export GDK_BACKEND=x11
+          export QT_X11_NO_MITSHM=1
+
+          unset WAYLAND_DISPLAY
+          EOF
+
+          sudo chown \
+            "$USERNAME:$USERNAME" \
+            "$HOME_DIR/.profile"
+
+      # ============================================================
+      # 17. CONFIGURE LXDE FOR XRDP
+      # ============================================================
+      - name: Configure LXDE xRDP Session
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          USERNAME="RDP"
+          HOME_DIR="/home/$USERNAME"
+
           sudo -u "$USERNAME" tee "$HOME_DIR/.xsession" >/dev/null <<'EOF'
           #!/bin/sh
 
-          export XDG_SESSION_TYPE=x11
-          export XDG_CURRENT_DESKTOP=LXDE
-          export XDG_SESSION_DESKTOP=LXDE
-
-          export XDG_CONFIG_DIRS="/etc/xdg"
-          export XDG_DATA_DIRS="/usr/local/share:/usr/share"
-
-          unset WAYLAND_DISPLAY
-          unset DBUS_SESSION_BUS_ADDRESS
-
-          exec dbus-run-session -- lxsession -s LXDE -e LXDE
-          EOF
-
-          sudo chmod 755 "$HOME_DIR/.xsession"
-          sudo chown "$USERNAME:$USERNAME" "$HOME_DIR/.xsession"
-
-          # Make sure LXDE uses X11 and not Wayland.
-          sudo -u "$USERNAME" tee "$HOME_DIR/.profile" >/dev/null <<'EOF'
           export XDG_SESSION_TYPE=x11
           export XDG_CURRENT_DESKTOP=LXDE
           export XDG_SESSION_DESKTOP=LXDE
@@ -162,35 +718,46 @@ jobs:
           export QT_X11_NO_MITSHM=1
 
           unset WAYLAND_DISPLAY
-          unset DBUS_SESSION_BUS_ADDRESS
+
+          # Start a fresh D-Bus session and then LXDE.
+          exec dbus-run-session -- startlxde
           EOF
 
-          sudo chown "$USERNAME:$USERNAME" "$HOME_DIR/.profile"
+          sudo chmod 0755 "$HOME_DIR/.xsession"
+
+          sudo chown \
+            "$USERNAME:$USERNAME" \
+            "$HOME_DIR/.xsession"
 
           echo
-          echo "=== USER SESSION ==="
+          echo "=== LXDE COMMAND ==="
+          command -v startlxde
+
+          echo
+          echo "=== X11 SESSION FILES ==="
+          ls -la /usr/share/xsessions/
+
+          echo
+          echo "=== .xsession ==="
           sudo cat "$HOME_DIR/.xsession"
 
-          echo
-          echo "=== USER PROFILE ==="
-          sudo cat "$HOME_DIR/.profile"
-
-      # =========================================================
-      # CONFIGURE XRDP
-      # =========================================================
+      # ============================================================
+      # 18. KEEP SYSTEM XRDP STARTUP SIMPLE
+      #
+      # Ubuntu's Xsession handles ~/.xsession for us.
+      # Do not replace it with a custom GNOME/XFCE startup script.
+      # ============================================================
       - name: Configure xRDP
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
-          # Backup packaged Ubuntu startup script.
           if [ -f /etc/xrdp/startwm.sh ]; then
             sudo cp \
               /etc/xrdp/startwm.sh \
-              /etc/xrdp/startwm.sh.backup
+              /etc/xrdp/startwm.sh.original
           fi
 
-          # Keep xrdp's normal Ubuntu/Xsession flow.
           sudo tee /etc/xrdp/startwm.sh >/dev/null <<'EOF'
           #!/bin/sh
 
@@ -204,18 +771,16 @@ jobs:
           fi
 
           unset WAYLAND_DISPLAY
-          unset DBUS_SESSION_BUS_ADDRESS
 
           exec /etc/X11/Xsession
           EOF
 
-          sudo chmod 755 /etc/xrdp/startwm.sh
+          sudo chmod 0755 /etc/xrdp/startwm.sh
 
-          # Ensure xrdp has access to its TLS key/certificate.
           sudo usermod -aG ssl-cert xrdp
 
           echo
-          echo "=== XRDP START SCRIPT ==="
+          echo "=== XRDP STARTWM ==="
           sudo cat /etc/xrdp/startwm.sh
 
           echo
@@ -224,15 +789,342 @@ jobs:
             '^(port|address|security_layer|crypt_level)=' \
             /etc/xrdp/xrdp.ini || true
 
-      # =========================================================
-      # INSTALL TAILSCALE
-      # =========================================================
+      # ============================================================
+      # 19. OPENAI CODEX SANDBOX
+      #
+      # OpenAI currently documents bubblewrap for Linux and an
+      # AppArmor bwrap profile specifically for Ubuntu 24.04.
+      # ============================================================
+      - name: Configure Codex Sandbox
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get install -y \
+            bubblewrap \
+            seccomp \
+            libseccomp2 \
+            apparmor \
+            apparmor-utils \
+            apparmor-profiles \
+            apparmor-profiles-extra
+
+          sudo systemctl enable --now apparmor.service || true
+
+          BWRAP_PROFILE="/usr/share/apparmor/extra-profiles/bwrap-userns-restrict"
+
+          if [ -f "$BWRAP_PROFILE" ]; then
+
+            sudo install \
+              -m 0644 \
+              "$BWRAP_PROFILE" \
+              /etc/apparmor.d/bwrap-userns-restrict
+
+            sudo apparmor_parser \
+              -r \
+              /etc/apparmor.d/bwrap-userns-restrict
+
+            sudo systemctl reload apparmor.service || true
+
+            echo "Loaded bwrap AppArmor profile."
+
+          else
+
+            echo "bwrap AppArmor profile not available."
+
+          fi
+
+          echo
+          echo "=== BWRAP ==="
+          command -v bwrap
+          bwrap --version
+
+          echo
+          echo "=== APPARMOR ==="
+          sudo aa-status || true
+
+      # ============================================================
+      # 20. INSTALL OFFICIAL CHATGPT LINUX DESKTOP
+      #
+      # Official OpenAI documentation:
+      # https://learn.chatgpt.com/docs/linux/linux-app
+      #
+      # Ubuntu/Debian x64 uses chatgpt_amd64.deb.
+      # ============================================================
+      - name: Install Official ChatGPT Desktop
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          USERNAME="RDP"
+          HOME_DIR="/home/$USERNAME"
+
+          ARCH="$(uname -m)"
+
+          if [ "$ARCH" != "x86_64" ]; then
+            echo "This workflow expects an x64 GitHub runner."
+            echo "Detected architecture: $ARCH"
+            exit 1
+          fi
+
+          DOWNLOAD_DIR="$HOME_DIR/Downloads"
+          PACKAGE="$DOWNLOAD_DIR/chatgpt_amd64.deb"
+
+          sudo -u "$USERNAME" mkdir -p "$DOWNLOAD_DIR"
+
+          # Current official OpenAI download URL documented by
+          # https://learn.chatgpt.com/docs/linux/linux-app
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-delay 2 \
+            --connect-timeout 20 \
+            --output "$PACKAGE" \
+            "https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_amd64.deb"
+
+          echo
+          echo "=== PACKAGE FILE ==="
+          file "$PACKAGE"
+
+          echo
+          echo "=== PACKAGE METADATA ==="
+          dpkg-deb --info "$PACKAGE" | sed -n '1,60p'
+
+          echo
+          echo "=== INSTALLING CHATGPT ==="
+
+          sudo apt-get install -y \
+            "$PACKAGE"
+
+          sudo apt-get install -f -y
+
+          echo
+          echo "=== CHATGPT PACKAGE ==="
+
+          dpkg-query \
+            -W \
+            -f='${Package}: ${Version}\n' \
+            chatgpt
+
+          echo
+          echo "=== CHATGPT COMMAND ==="
+          command -v chatgpt
+
+          echo
+          echo "=== CHATGPT DESKTOP ENTRY ==="
+
+          CHATGPT_DESKTOP="$(
+            find /usr/share/applications \
+              -maxdepth 1 \
+              -type f \
+              -iname '*chatgpt*.desktop' \
+              -print -quit
+          )"
+
+          if [ -n "$CHATGPT_DESKTOP" ]; then
+            echo "$CHATGPT_DESKTOP"
+
+            sudo cp \
+              "$CHATGPT_DESKTOP" \
+              "$HOME_DIR/Desktop/ChatGPT.desktop"
+
+            sudo chown \
+              "$USERNAME:$USERNAME" \
+              "$HOME_DIR/Desktop/ChatGPT.desktop"
+
+            sudo chmod 0755 \
+              "$HOME_DIR/Desktop/ChatGPT.desktop"
+          fi
+
+          # Remove the installer after successful installation.
+          rm -f "$PACKAGE"
+
+          echo
+          echo "Official ChatGPT Desktop installed."
+
+      # ============================================================
+      # 21. UPDATE CHATGPT FROM THE SIGNED OPENAI APT REPOSITORY
+      #
+      # The official package configures its signed repository.
+      # This validates that apt can see the installed application.
+      # ============================================================
+      - name: Verify ChatGPT Repository and Package
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+
+          echo
+          echo "=== CHATGPT ==="
+
+          dpkg-query \
+            -W \
+            -f='${Package}: ${Version}\n' \
+            chatgpt
+
+          echo
+          echo "=== CHATGPT LOCATION ==="
+          command -v chatgpt
+
+          echo
+          echo "=== CHATGPT PACKAGE FILES ==="
+          dpkg-query \
+            -L chatgpt |
+            sed -n '1,120p'
+
+      # ============================================================
+      # 22. INSTALL OPENAI CODEX CLI
+      #
+      # Current OpenAI documentation uses:
+      # curl -fsSL https://chatgpt.com/codex/install.sh | sh
+      # ============================================================
+      - name: Install Codex CLI
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          USERNAME="RDP"
+          HOME_DIR="/home/$USERNAME"
+
+          sudo -u "$USERNAME" \
+            env \
+              HOME="$HOME_DIR" \
+              CODEX_HOME="$HOME_DIR/.codex" \
+              CODEX_INSTALL_DIR="$HOME_DIR/.local/bin" \
+              CODEX_NON_INTERACTIVE=1 \
+            bash -lc \
+              'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+
+          sudo chown -R \
+            "$USERNAME:$USERNAME" \
+            "$HOME_DIR/.codex" \
+            "$HOME_DIR/.local" \
+            2>/dev/null || true
+
+          CODEX_BIN="$(
+            sudo -u "$USERNAME" \
+              env HOME="$HOME_DIR" \
+              bash -lc 'command -v codex 2>/dev/null || true'
+          )"
+
+          if [ -z "$CODEX_BIN" ] && [ -x "$HOME_DIR/.local/bin/codex" ]; then
+            CODEX_BIN="$HOME_DIR/.local/bin/codex"
+          fi
+
+          if [ -z "$CODEX_BIN" ]; then
+            echo "ERROR: Codex CLI was not installed."
+            find "$HOME_DIR/.local" \
+              -maxdepth 4 \
+              -type f \
+              -name 'codex*' \
+              -print || true
+            exit 1
+          fi
+
+          echo
+          echo "Codex:"
+          echo "$CODEX_BIN"
+
+          sudo ln -sfn \
+            "$CODEX_BIN" \
+            /usr/local/bin/codex
+
+          sudo -u "$USERNAME" \
+            env \
+              HOME="$HOME_DIR" \
+              CODEX_HOME="$HOME_DIR/.codex" \
+              PATH="$HOME_DIR/.local/bin:/usr/local/bin:$PATH" \
+            codex --version
+
+      # ============================================================
+      # 23. VERIFY BUBBLEWRAP
+      # ============================================================
+      - name: Test Codex Sandbox
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          USERNAME="RDP"
+          HOME_DIR="/home/$USERNAME"
+
+          echo "Testing unprivileged bubblewrap..."
+
+          if sudo -u "$USERNAME" \
+            env HOME="$HOME_DIR" \
+            bwrap \
+              --unshare-all \
+              --die-with-parent \
+              --new-session \
+              --ro-bind / / \
+              --proc /proc \
+              --dev /dev \
+              /usr/bin/true; then
+
+            echo
+            echo "bubblewrap sandbox test PASSED."
+
+          else
+
+            echo
+            echo "Initial bubblewrap test failed."
+
+            echo
+            echo "AppArmor status:"
+            sudo aa-status || true
+
+            echo
+            echo "User namespace restriction:"
+            sysctl \
+              kernel.apparmor_restrict_unprivileged_userns \
+              2>/dev/null || true
+
+            # OpenAI's documented Ubuntu 24.04 fallback.
+            sudo sysctl \
+              -w \
+              kernel.apparmor_restrict_unprivileged_userns=0
+
+            if sudo -u "$USERNAME" \
+              env HOME="$HOME_DIR" \
+              bwrap \
+                --unshare-all \
+                --die-with-parent \
+                --new-session \
+                --ro-bind / / \
+                --proc /proc \
+                --dev /dev \
+                /usr/bin/true; then
+
+              echo
+              echo "bubblewrap sandbox works after fallback."
+
+            else
+
+              echo
+              echo "ERROR: bubblewrap still cannot create a user namespace."
+              exit 1
+
+            fi
+          fi
+
+      # ============================================================
+      # 24. INSTALL TAILSCALE
+      # ============================================================
       - name: Install Tailscale
         shell: bash
         run: |
           set -euxo pipefail
 
-          curl -fsSL https://tailscale.com/install.sh | sh
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            https://tailscale.com/install.sh |
+            sh
 
           sudo systemctl enable --now tailscaled
 
@@ -240,28 +1132,30 @@ jobs:
           echo "=== TAILSCALE VERSION ==="
           tailscale version
 
-      # =========================================================
-      # CONNECT TAILSCALE
-      # =========================================================
+      # ============================================================
+      # 25. CONNECT TAILSCALE
+      # ============================================================
       - name: Connect Tailscale
         shell: bash
         run: |
           set -euxo pipefail
 
-          HOSTNAME="gh-lxde-rdp-${GITHUB_RUN_ID}"
+          HOSTNAME="gh-ubuntu-workstation-${GITHUB_RUN_ID}"
 
           sudo tailscale up \
             --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
             --hostname="$HOSTNAME"
 
-          echo
-          echo "=== TAILSCALE STATUS ==="
-          sudo tailscale status
-
           TS_IP=""
 
           for i in $(seq 1 30); do
-            TS_IP="$(sudo tailscale ip -4 | head -n1 | tr -d '\r\n' || true)"
+
+            TS_IP="$(
+              sudo tailscale ip -4 |
+              head -n 1 |
+              tr -d '\r\n' ||
+              true
+            )"
 
             if [ -n "$TS_IP" ]; then
               break
@@ -273,7 +1167,7 @@ jobs:
 
           if [ -z "$TS_IP" ]; then
             echo
-            echo "ERROR: Tailscale IPv4 address was not assigned."
+            echo "ERROR: No Tailscale IPv4 address."
             sudo tailscale status
             exit 1
           fi
@@ -281,21 +1175,27 @@ jobs:
           echo "TAILSCALE_IP=$TS_IP" >> "$GITHUB_ENV"
 
           echo
-          echo "Tailscale IPv4: $TS_IP"
+          echo "=== TAILSCALE STATUS ==="
+          sudo tailscale status
 
-      # =========================================================
-      # FIREWALL
-      # =========================================================
+          echo
+          echo "Tailscale IPv4:"
+          echo "$TS_IP"
+
+      # ============================================================
+      # 26. FIREWALL
+      #
+      # RDP is permitted only via tailscale0.
+      # ============================================================
       - name: Configure Firewall
         shell: bash
         run: |
           set -euxo pipefail
 
-          # Deny unsolicited traffic by default.
           sudo ufw default deny incoming
           sudo ufw default allow outgoing
 
-          # RDP ONLY through Tailscale.
+          # Allow RDP only on the Tailscale interface.
           sudo ufw allow in on tailscale0 \
             to any port 3389 \
             proto tcp
@@ -306,9 +1206,9 @@ jobs:
           echo "=== FIREWALL ==="
           sudo ufw status verbose
 
-      # =========================================================
-      # START XRDP
-      # =========================================================
+      # ============================================================
+      # 27. START XRDP AFTER NETWORK/FIREWALL IS READY
+      # ============================================================
       - name: Start xRDP
         shell: bash
         run: |
@@ -317,148 +1217,332 @@ jobs:
           sudo systemctl daemon-reload
 
           sudo systemctl enable xrdp
+
           sudo systemctl restart xrdp
 
           sleep 3
 
           echo
-          echo "=== XRDP SERVICE ==="
+          echo "=== XRDP ==="
           sudo systemctl --no-pager --full status xrdp
 
           echo
           echo "=== XRDP SESMAN ==="
           sudo systemctl --no-pager --full status xrdp-sesman
 
-      # =========================================================
-      # VERIFY SERVER BEFORE DISPLAYING CONNECTION DETAILS
-      # =========================================================
-      - name: Verify RDP
+      # ============================================================
+      # 28. COMPLETE VALIDATION
+      # ============================================================
+      - name: Validate Workstation
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
-          echo "=== LISTENING ON 3389 ==="
-          sudo ss -lntp | grep ':3389'
+          USERNAME="RDP"
+          HOME_DIR="/home/$USERNAME"
 
           echo
-          echo "=== XRDP SERVICE ==="
+          echo "=================================================="
+          echo "XRDP"
+          echo "=================================================="
+
           sudo systemctl is-active xrdp
           sudo systemctl is-active xrdp-sesman
 
-          echo
-          echo "=== TAILSCALE ==="
-          sudo tailscale status
+          sudo ss -lntp | grep ':3389'
 
           echo
-          echo "=== TAILSCALE INTERFACE ==="
+          echo "=================================================="
+          echo "TAILSCALE"
+          echo "=================================================="
+
+          sudo systemctl is-active tailscaled
+          sudo tailscale status
           ip addr show tailscale0
 
           echo
-          echo "=== FIREWALL ==="
+          echo "=================================================="
+          echo "FIREWALL"
+          echo "=================================================="
+
           sudo ufw status verbose
 
           echo
-          echo "=== X11 SESSIONS ==="
-          ls -la /usr/share/xsessions/
+          echo "=================================================="
+          echo "LXDE"
+          echo "=================================================="
+
+          command -v startlxde
+          command -v lxsession
+          command -v openbox
+          command -v pcmanfm
+          command -v lxterminal
 
           echo
-          echo "=== RDP USER ==="
-          id "$RDP_USER"
+          echo "=================================================="
+          echo "X11"
+          echo "=================================================="
+
+          command -v Xorg
+          command -v xauth
 
           echo
-          echo "=== SESSION FILE ==="
-          sudo cat "/home/$RDP_USER/.xsession"
+          echo "=================================================="
+          echo "GRAPHICS"
+          echo "=================================================="
+
+          glxinfo -B || true
+          vulkaninfo --summary || true
+          vainfo || true
 
           echo
-          echo "=== TCP TEST ==="
-          nc -vz -w 5 "$TAILSCALE_IP" 3389
+          echo "=================================================="
+          echo "AUDIO"
+          echo "=================================================="
+
+          command -v pw-cli || true
+          command -v pactl || true
+
+          dpkg-query \
+            -W \
+            -f='${Package}: ${Version}\n' \
+            pipewire \
+            wireplumber \
+            pipewire-module-xrdp
 
           echo
-          echo "=== XRDP LOG ==="
-          sudo tail -n 80 /var/log/xrdp.log || true
+          echo "=================================================="
+          echo "BROWSER"
+          echo "=================================================="
+
+          google-chrome --version || true
+          chromium --version || true
+          firefox --version || true
 
           echo
-          echo "=== XRDP SESMAN LOG ==="
-          sudo tail -n 120 /var/log/xrdp-sesman.log || true
+          echo "=================================================="
+          echo "WEB DRIVERS"
+          echo "=================================================="
+
+          chromedriver --version || true
+          geckodriver --version || true
 
           echo
-          echo "=========================================="
-          echo "RDP SERVER VERIFIED"
-          echo "=========================================="
+          echo "=================================================="
+          echo "DEVELOPER TOOLS"
+          echo "=================================================="
 
-      # =========================================================
-      # CONNECTION DETAILS
-      # =========================================================
+          git --version
+          node --version
+          npm --version
+          python3 --version
+          gcc --version | head -n 1
+          g++ --version | head -n 1
+          clang --version | head -n 1
+          cmake --version | head -n 1
+          ninja --version
+          docker --version
+          gh --version | head -n 1 || true
+
+          echo
+          echo "=================================================="
+          echo "SANDBOX"
+          echo "=================================================="
+
+          bwrap --version
+          sudo aa-status || true
+
+          echo
+          echo "=================================================="
+          echo "CHATGPT"
+          echo "=================================================="
+
+          dpkg-query \
+            -W \
+            -f='${Package}: ${Version}\n' \
+            chatgpt
+
+          command -v chatgpt
+
+          echo
+          echo "ChatGPT desktop files:"
+          find /usr/share/applications \
+            -maxdepth 1 \
+            -type f \
+            -iname '*chatgpt*.desktop' \
+            -print || true
+
+          echo
+          echo "=================================================="
+          echo "CODEX"
+          echo "=================================================="
+
+          command -v codex
+
+          sudo -u "$USERNAME" \
+            env \
+              HOME="$HOME_DIR" \
+              CODEX_HOME="$HOME_DIR/.codex" \
+              PATH="$HOME_DIR/.local/bin:/usr/local/bin:$PATH" \
+            codex --version
+
+          echo
+          echo "=================================================="
+          echo "RDP USER"
+          echo "=================================================="
+
+          id "$USERNAME"
+
+          echo
+          echo "=================================================="
+          echo "PATHS"
+          echo "=================================================="
+
+          ls -ld \
+            "$HOME_DIR" \
+            "$HOME_DIR/Desktop" \
+            "$HOME_DIR/Documents" \
+            "$HOME_DIR/Downloads" \
+            "$HOME_DIR/Projects" \
+            "$HOME_DIR/Code" \
+            "$HOME_DIR/.codex" \
+            /workspace
+
+          echo
+          echo "=================================================="
+          echo "XRDP LOG"
+          echo "=================================================="
+
+          sudo tail -n 100 \
+            /var/log/xrdp.log || true
+
+          echo
+          echo "=================================================="
+          echo "XRDP SESMAN LOG"
+          echo "=================================================="
+
+          sudo tail -n 150 \
+            /var/log/xrdp-sesman.log || true
+
+          echo
+          echo "=================================================="
+          echo "TCP TEST"
+          echo "=================================================="
+
+          nc -vz -w 5 \
+            "$TAILSCALE_IP" \
+            3389
+
+          echo
+          echo "=================================================="
+          echo "WORKSTATION VALIDATION COMPLETE"
+          echo "=================================================="
+
+      # ============================================================
+      # 29. SHOW CONNECTION INFORMATION
+      # ============================================================
       - name: Show RDP Access
         shell: bash
         run: |
           echo
-          echo "================================================"
-          echo "              UBUNTU LXDE RDP"
-          echo "================================================"
+          echo "================================================================"
+          echo "                  UBUNTU WORKSTATION READY"
+          echo "================================================================"
           echo
-          echo "Host:"
+          echo "RDP HOST:"
           echo "$TAILSCALE_IP:3389"
           echo
-          echo "Username:"
+          echo "USERNAME:"
           echo "RDP"
           echo
-          echo "Password:"
+          echo "PASSWORD:"
           echo "admin"
           echo
-          echo "Desktop:"
-          echo "LXDE"
+          echo "RDP SESSION:"
+          echo "Xorg"
           echo
-          echo "Window Manager:"
-          echo "Openbox"
+          echo "DESKTOP:"
+          echo "LXDE + Openbox"
           echo
-          echo "Display:"
-          echo "Xorg / xorgxrdp"
+          echo "CHATGPT:"
+          echo "Launch 'ChatGPT' from the Applications menu"
+          echo "or run: chatgpt"
           echo
-          echo "Network:"
+          echo "CODEX:"
+          echo "codex"
+          echo
+          echo "WORKSPACE:"
+          echo "/workspace"
+          echo
+          echo "PROJECTS:"
+          echo "/home/RDP/Projects"
+          echo
+          echo "CODE:"
+          echo "/home/RDP/Code"
+          echo
+          echo "DOWNLOADS:"
+          echo "/home/RDP/Downloads"
+          echo
+          echo "NETWORK:"
           echo "Tailscale only"
           echo
-          echo "================================================"
-          echo "Connect using:"
+          echo "================================================================"
+          echo "Connect from Microsoft Remote Desktop:"
+          echo
           echo "$TAILSCALE_IP:3389"
-          echo "================================================"
+          echo
+          echo "================================================================"
 
-      # =========================================================
-      # KEEP RUNNER ALIVE
-      # =========================================================
-      - name: Keep RDP Alive
+      # ============================================================
+      # 30. KEEP WORKSTATION ALIVE
+      # ============================================================
+      - name: Keep Workstation Alive
         shell: bash
         run: |
           set -u
 
           echo
-          echo "RDP SESSION ACTIVE"
-          echo "Runner maximum duration: 360 minutes."
+          echo "=================================================="
+          echo "REMOTE WORKSTATION ACTIVE"
+          echo "=================================================="
+          echo
+          echo "GitHub-hosted runner maximum job duration: 360 minutes."
           echo
 
           while true; do
 
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] RDP active"
+            NOW="$(date '+%Y-%m-%d %H:%M:%S')"
 
-            # Automatically restart xrdp if the service dies.
+            echo "[$NOW] Workstation active"
+
+            # Keep xrdp alive.
             if ! sudo systemctl is-active --quiet xrdp; then
 
-              echo "WARNING: xrdp stopped."
-              echo "Attempting restart..."
+              echo "[$NOW] xrdp stopped. Restarting..."
 
               sudo systemctl restart xrdp || true
 
               echo
-              echo "=== XRDP STATUS ==="
-              sudo systemctl --no-pager status xrdp || true
+              sudo systemctl \
+                --no-pager \
+                status xrdp || true
 
               echo
-              echo "=== XRDP LOG ==="
-              sudo tail -n 100 /var/log/xrdp.log || true
+              sudo tail -n 100 \
+                /var/log/xrdp.log || true
 
               echo
-              echo "=== SESMAN LOG ==="
-              sudo tail -n 150 /var/log/xrdp-sesman.log || true
+              sudo tail -n 150 \
+                /var/log/xrdp-sesman.log || true
+            fi
+
+            # Keep Tailscale alive.
+            if ! sudo systemctl is-active --quiet tailscaled; then
+
+              echo "[$NOW] tailscaled stopped. Restarting..."
+
+              sudo systemctl restart tailscaled || true
+
             fi
 
             sleep 30
