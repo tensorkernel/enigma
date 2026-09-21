@@ -1,4 +1,3 @@
-```yaml
 name: Ubuntu XFCE RDP
 
 on:
@@ -349,4 +348,3 @@ jobs:
 
             sleep 30
           done
-```
