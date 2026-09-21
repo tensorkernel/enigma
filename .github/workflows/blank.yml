@@ -1,4 +1,4 @@
-name: Ubuntu XFCE RDP
+name: Ubuntu LXDE RDP
 
 on:
   workflow_dispatch:
@@ -9,62 +9,81 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: System info
+
+      # ---------------------------------------------------------
+      # SYSTEM
+      # ---------------------------------------------------------
+      - name: System Information
         shell: bash
         run: |
-          set -eux
-          echo "=== OS ==="
+          set -euxo pipefail
+
           cat /etc/os-release
           echo
-          echo "=== CPU ==="
+          uname -a
+          echo
           nproc
-          echo
-          echo "=== MEMORY ==="
           free -h
-          echo
-          echo "=== DISK ==="
           df -h /
 
-      - name: Install XFCE and xrdp
+      # ---------------------------------------------------------
+      # INSTALL LIGHTWEIGHT DESKTOP + XRDP
+      # ---------------------------------------------------------
+      - name: Install LXDE and xRDP
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
+
           export DEBIAN_FRONTEND=noninteractive
 
           sudo apt-get update
 
           sudo apt-get install -y \
-            xfce4 \
-            xfce4-goodies \
+            lxde-core \
+            openbox-lxde-session \
+            lxsession \
+            lxpanel \
+            pcmanfm \
+            lxterminal \
+            lxappearance \
+            lxpolkit \
+            openbox \
             xrdp \
             xorgxrdp \
             dbus-x11 \
             dbus-user-session \
             xauth \
+            x11-xserver-utils \
             curl \
             ca-certificates \
-            netcat-openbsd
+            netcat-openbsd \
+            ufw
 
           sudo apt-get install -f -y
 
           echo
-          echo "=== XRDP VERSION ==="
+          echo "=== XRDP ==="
           xrdp --version || true
 
           echo
-          echo "=== XFCE ==="
-          xfce4-session --version || true
+          echo "=== LXSESSION ==="
+          lxsession --version || true
 
-      - name: Create RDP user
+          echo
+          echo "=== LXDE SESSION FILES ==="
+          ls -la /usr/share/xsessions/
+
+      # ---------------------------------------------------------
+      # CREATE USER
+      # ---------------------------------------------------------
+      - name: Create RDP User
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           USERNAME="RDP"
 
-          if id "$USERNAME" >/dev/null 2>&1; then
-            echo "User already exists"
-          else
+          if ! id "$USERNAME" >/dev/null 2>&1; then
             sudo useradd \
               --create-home \
               --shell /bin/bash \
@@ -76,37 +95,35 @@ jobs:
           import secrets
           import string
 
-          upper = string.ascii_uppercase
-          lower = string.ascii_lowercase
-          digits = string.digits
-          special = "!@#$%^&*_-+=?"
+          chars = []
 
-          chars = [
-              secrets.choice(upper) for _ in range(4)
-          ] + [
-              secrets.choice(lower) for _ in range(4)
-          ] + [
-              secrets.choice(digits) for _ in range(4)
-          ] + [
-              secrets.choice(special) for _ in range(4)
-          ]
+          chars += [secrets.choice(string.ascii_uppercase) for _ in range(4)]
+          chars += [secrets.choice(string.ascii_lowercase) for _ in range(4)]
+          chars += [secrets.choice(string.digits) for _ in range(4)]
+          chars += [secrets.choice("!@#$%^&*_-+=?") for _ in range(4)]
 
-          alphabet = upper + lower + digits + special
+          alphabet = (
+              string.ascii_uppercase +
+              string.ascii_lowercase +
+              string.digits +
+              "!@#$%^&*_-+=?"
+          )
 
           while len(chars) < 24:
               chars.append(secrets.choice(alphabet))
 
           secrets.SystemRandom().shuffle(chars)
+
           print("".join(chars))
           PY
           )"
 
           echo "$USERNAME:$PASSWORD" | sudo chpasswd
 
-          # sudo access
+          # Give the RDP user sudo access.
           sudo usermod -aG sudo "$USERNAME"
 
-          # xrdp certificate permissions
+          # xrdp needs access to its certificate.
           sudo usermod -aG ssl-cert xrdp
 
           {
@@ -114,69 +131,102 @@ jobs:
             echo "RDP_PASSWORD=$PASSWORD"
           } >> "$GITHUB_ENV"
 
-          echo "RDP account created."
+          echo "RDP user ready."
 
-      - name: Configure XFCE session
+      # ---------------------------------------------------------
+      # LXDE SESSION
+      # ---------------------------------------------------------
+      - name: Configure LXDE Session
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           USERNAME="RDP"
           HOME_DIR="/home/$USERNAME"
 
-          # Start an XFCE session for the RDP user.
-          sudo -u "$USERNAME" bash -c 'printf "%s\n" "startxfce4" > "$HOME/.xsession"'
-          sudo chmod 755 "$HOME_DIR/.xsession"
+          sudo mkdir -p "$HOME_DIR"
 
-          # Clean environment that commonly causes session problems.
-          sudo -u "$USERNAME" bash -c '
-            cat > "$HOME/.profile" <<EOF
+          # Force a clean X11/LXDE session.
+          sudo -u "$USERNAME" tee "$HOME_DIR/.xsession" >/dev/null <<'EOF'
+          #!/bin/sh
+
           export XDG_SESSION_TYPE=x11
-          export XDG_CURRENT_DESKTOP=XFCE
-          export XDG_SESSION_DESKTOP=xfce
-          export GDK_BACKEND=x11
-          export QT_X11_NO_MITSHM=1
+          export XDG_CURRENT_DESKTOP=LXDE
+          export XDG_SESSION_DESKTOP=LXDE
+
+          # Ubuntu's xrdp/X11 session should use /etc/xdg.
+          export XDG_CONFIG_DIRS="/etc/xdg:/etc/xdg/xdg-LXDE"
+          export XDG_DATA_DIRS="/usr/local/share:/usr/share"
+
           unset WAYLAND_DISPLAY
           unset DBUS_SESSION_BUS_ADDRESS
+
+          exec dbus-run-session -- lxsession -s LXDE -e LXDE
           EOF
-          '
 
-          # Use the normal Ubuntu/Xsession mechanism and explicitly
-          # select XFCE.
-          sudo cp /etc/xrdp/startwm.sh /etc/xrdp/startwm.sh.orig
+          sudo chmod 755 "$HOME_DIR/.xsession"
 
+          sudo chown "$USERNAME:$USERNAME" \
+            "$HOME_DIR/.xsession"
+
+          # Clean user cache/session state from previous attempts.
+          sudo -u "$USERNAME" rm -rf \
+            "$HOME_DIR/.cache/sessions" \
+            "$HOME_DIR/.cache/xfce4" \
+            "$HOME_DIR/.config/xfce4" \
+            || true
+
+          echo
+          echo "=== .xsession ==="
+          sudo cat "$HOME_DIR/.xsession"
+
+      # ---------------------------------------------------------
+      # KEEP UBUNTU'S NORMAL XRDP STARTUP
+      # ---------------------------------------------------------
+      - name: Configure xRDP Startup
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Back up the packaged script.
+          sudo cp \
+            /etc/xrdp/startwm.sh \
+            /etc/xrdp/startwm.sh.github-backup
+
+          # Use the standard Ubuntu/X11 session path.
           sudo tee /etc/xrdp/startwm.sh >/dev/null <<'EOF'
           #!/bin/sh
 
-          unset DBUS_SESSION_BUS_ADDRESS
-          unset XDG_RUNTIME_DIR
-          unset WAYLAND_DISPLAY
-
-          if [ -r /etc/profile ]; then
+          if test -r /etc/profile; then
               . /etc/profile
           fi
 
-          if [ -r "$HOME/.profile" ]; then
-              . "$HOME/.profile"
+          if test -r /etc/default/locale; then
+              . /etc/default/locale
+              export LANG LANGUAGE
           fi
 
-          exec startxfce4
+          # Let Ubuntu Xsession load the user's .xsession.
+          if test -x /etc/X11/Xsession; then
+              exec /etc/X11/Xsession
+          fi
+
+          exec /bin/sh /etc/X11/Xsession
           EOF
 
           sudo chmod 755 /etc/xrdp/startwm.sh
 
           echo
-          echo "=== /etc/xrdp/startwm.sh ==="
+          echo "=== XRDP START SCRIPT ==="
           sudo cat /etc/xrdp/startwm.sh
 
-          echo
-          echo "=== RDP USER .xsession ==="
-          sudo cat "$HOME_DIR/.xsession"
-
+      # ---------------------------------------------------------
+      # TAILSCALE
+      # ---------------------------------------------------------
       - name: Install Tailscale
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           curl -fsSL https://tailscale.com/install.sh | sh
 
@@ -184,20 +234,16 @@ jobs:
 
           tailscale version
 
-      - name: Connect to Tailscale
+      - name: Connect Tailscale
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
-          HOSTNAME="gh-xfce-rdp-${GITHUB_RUN_ID}"
+          HOSTNAME="gh-lxde-rdp-${GITHUB_RUN_ID}"
 
           sudo tailscale up \
             --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
             --hostname="$HOSTNAME"
-
-          echo
-          echo "=== TAILSCALE STATUS ==="
-          sudo tailscale status
 
           TS_IP=""
 
@@ -208,12 +254,11 @@ jobs:
               break
             fi
 
-            echo "Waiting for Tailscale IP..."
             sleep 2
           done
 
           if [ -z "$TS_IP" ]; then
-            echo "ERROR: No Tailscale IPv4 address."
+            echo "No Tailscale IPv4 address."
             sudo tailscale status
             exit 1
           fi
@@ -223,31 +268,33 @@ jobs:
           echo
           echo "Tailscale IP: $TS_IP"
 
-      - name: Configure firewall
+      # ---------------------------------------------------------
+      # FIREWALL
+      # ---------------------------------------------------------
+      - name: Configure Firewall
         shell: bash
         run: |
-          set -eux
-
-          sudo apt-get install -y ufw
+          set -euxo pipefail
 
           sudo ufw default deny incoming
           sudo ufw default allow outgoing
 
-          # RDP only through the Tailscale interface.
+          # RDP only via Tailscale.
           sudo ufw allow in on tailscale0 \
             to any port 3389 \
             proto tcp
 
           sudo ufw --force enable
 
-          echo
-          echo "=== FIREWALL ==="
           sudo ufw status verbose
 
-      - name: Start xrdp
+      # ---------------------------------------------------------
+      # START XRDP
+      # ---------------------------------------------------------
+      - name: Start xRDP
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           sudo systemctl daemon-reload
 
@@ -261,48 +308,59 @@ jobs:
           sudo systemctl --no-pager --full status xrdp
 
           echo
-          echo "=== XRDP-SESMAN ==="
+          echo "=== XRDP SESMAN ==="
           sudo systemctl --no-pager --full status xrdp-sesman
 
+      # ---------------------------------------------------------
+      # PRE-CONNECTION CHECK
+      # ---------------------------------------------------------
       - name: Verify RDP
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
-          echo "=== LISTENING PORT ==="
+          echo "=== PORT 3389 ==="
           sudo ss -lntp | grep ':3389'
 
           echo
-          echo "=== XRDP STATUS ==="
+          echo "=== XRDP SERVICE ==="
           sudo systemctl is-active xrdp
           sudo systemctl is-active xrdp-sesman
-
-          echo
-          echo "=== XRDP LOG ==="
-          sudo tail -n 80 /var/log/xrdp.log || true
-
-          echo
-          echo "=== SESMAN LOG ==="
-          sudo tail -n 120 /var/log/xrdp-sesman.log || true
 
           echo
           echo "=== TAILSCALE ==="
           sudo tailscale status
 
           echo
+          echo "=== FIREWALL ==="
+          sudo ufw status verbose
+
+          echo
+          echo "=== X11 SESSIONS ==="
+          ls -la /usr/share/xsessions/
+
+          echo
+          echo "=== RDP USER ==="
+          id "$RDP_USER"
+
+          echo
+          echo "=== USER SESSION ==="
+          sudo -u "$RDP_USER" cat "/home/$RDP_USER/.xsession"
+
+          echo
           echo "=== TCP TEST ==="
           nc -vz -w 5 "$TAILSCALE_IP" 3389
 
-          echo
-          echo "RDP server is ready."
-
-      - name: Show connection details
+      # ---------------------------------------------------------
+      # CONNECTION INFORMATION
+      # ---------------------------------------------------------
+      - name: Show RDP Credentials
         shell: bash
         run: |
           echo
-          echo "================================================"
-          echo "              UBUNTU XFCE RDP"
-          echo "================================================"
+          echo "=============================================="
+          echo "              UBUNTU LXDE RDP"
+          echo "=============================================="
           echo
           echo "Host:"
           echo "$TAILSCALE_IP:3389"
@@ -314,26 +372,29 @@ jobs:
           echo "$RDP_PASSWORD"
           echo
           echo "Desktop:"
-          echo "XFCE"
+          echo "LXDE / Openbox"
           echo
-          echo "Backend:"
+          echo "Display:"
           echo "Xorg / xorgxrdp"
           echo
           echo "Network:"
-          echo "Tailscale only"
+          echo "Tailscale"
           echo
-          echo "================================================"
+          echo "=============================================="
 
-      - name: Keep runner alive
+      # ---------------------------------------------------------
+      # KEEP RUNNER ALIVE
+      # ---------------------------------------------------------
+      - name: Keep RDP Alive
         shell: bash
         run: |
-          set -u
-
           while true; do
+
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] RDP active"
 
             if ! sudo systemctl is-active --quiet xrdp; then
-              echo "xrdp stopped, attempting restart..."
+
+              echo "xrdp stopped. Restarting..."
 
               sudo systemctl restart xrdp || true
 
