@@ -1,112 +1,102 @@
-name: Ubuntu Desktop RDP
+```yaml
+name: Ubuntu 26.04 Desktop RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  ubuntu-rdp:
+  rdp:
     runs-on: ubuntu-26.04
     timeout-minutes: 360
 
-    steps:
-      - name: Show System Information
-        shell: bash
-        run: |
-          echo "=== SYSTEM ==="
-          lsb_release -a
-          echo
-          uname -a
-          echo
-          free -h
-          echo
-          df -h /
-          echo "=============="
+    permissions:
+      contents: read
 
-      - name: Install Ubuntu Desktop + xRDP
+    steps:
+      # ------------------------------------------------------------
+      # 1. BASE SYSTEM
+      # ------------------------------------------------------------
+      - name: Verify Ubuntu
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
+
+          echo "=== OS ==="
+          cat /etc/os-release
+
+          echo
+          echo "=== KERNEL ==="
+          uname -a
+
+          echo
+          echo "=== RESOURCES ==="
+          nproc
+          free -h
+          df -h /
+
+      # ------------------------------------------------------------
+      # 2. INSTALL UBUNTU DESKTOP + XRDP
+      #
+      # Ubuntu 26.04 provides:
+      #   ubuntu-desktop-minimal
+      #   gnome-session-flashback
+      #   xrdp
+      #   xorgxrdp
+      #
+      # Flashback/Metacity is used instead of GNOME Shell because
+      # modern GNOME/X11 sessions can terminate immediately under
+      # xrdp.
+      # ------------------------------------------------------------
+      - name: Install Desktop and xRDP
+        shell: bash
+        run: |
+          set -euxo pipefail
 
           export DEBIAN_FRONTEND=noninteractive
 
           sudo apt-get update
 
-          # Ubuntu Desktop GUI
           sudo apt-get install -y \
             ubuntu-desktop-minimal \
-            gnome-session \
-            gnome-shell \
-            dbus-x11
-
-          # RDP server + Xorg backend
-          sudo apt-get install -y \
+            gnome-session-flashback \
             xrdp \
             xorgxrdp \
             xserver-xorg-core \
-            xserver-xorg-input-all \
-            xorg
-
-          # Useful utilities
-          sudo apt-get install -y \
+            xserver-xorg \
+            dbus-x11 \
+            dbus-user-session \
+            policykit-1 \
+            policykit-1-gnome \
+            xauth \
+            x11-xserver-utils \
             curl \
-            wget \
-            unzip \
+            ca-certificates \
             net-tools \
+            iproute2 \
             netcat-openbsd
 
-      - name: Configure GNOME for xRDP
-        shell: bash
-        run: |
-          set -e
+          sudo apt-get install -f -y
 
-          # Force GDM to use Xorg rather than Wayland.
-          sudo mkdir -p /etc/gdm3
+          echo
+          echo "=== INSTALLED XRDP ==="
+          xrdp --version || true
 
-          sudo tee /etc/gdm3/custom.conf >/dev/null <<'EOF'
-          [daemon]
-          WaylandEnable=false
-          EOF
+          echo
+          echo "=== AVAILABLE X11 SESSIONS ==="
+          ls -la /usr/share/xsessions/
 
-          # Ubuntu GNOME session used by xRDP.
-          sudo tee /usr/local/bin/ubuntu-session >/dev/null <<'EOF'
-          #!/bin/sh
-
-          export GNOME_SHELL_SESSION_MODE=ubuntu
-          export DESKTOP_SESSION=ubuntu-xorg
-          export XDG_SESSION_DESKTOP=ubuntu-xorg
-          export XDG_CURRENT_DESKTOP=ubuntu:GNOME
-          export XDG_SESSION_TYPE=x11
-
-          exec /usr/bin/gnome-session --session=ubuntu
-          EOF
-
-          sudo chmod +x /usr/local/bin/ubuntu-session
-
-          sudo update-alternatives \
-            --install /usr/bin/x-session-manager \
-            x-session-manager \
-            /usr/local/bin/ubuntu-session \
-            60
-
-          # Make sure xrdp can read its TLS certificate/key.
-          sudo usermod -aG ssl-cert xrdp
-
-          sudo systemctl enable xrdp
-          sudo systemctl restart xrdp
-
-          echo "=== XRDP STATUS ==="
-          sudo systemctl --no-pager status xrdp || true
-          echo "==================="
-
+      # ------------------------------------------------------------
+      # 3. CREATE RDP USER
+      # ------------------------------------------------------------
       - name: Create RDP User
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
           USERNAME="RDP"
 
-          if sudo id "$USERNAME" >/dev/null 2>&1; then
-            echo "User already exists"
+          if id "$USERNAME" >/dev/null 2>&1; then
+            echo "User $USERNAME already exists"
           else
             sudo useradd \
               --create-home \
@@ -114,8 +104,8 @@ jobs:
               "$USERNAME"
           fi
 
-          # Generate a 24-character password with upper/lower/numbers/symbols.
-          PASSWORD="$(python3 - <<'PY'
+          PASSWORD="$(
+            python3 <<'PY'
           import secrets
           import string
 
@@ -146,45 +136,191 @@ jobs:
               secrets.choice(special),
           ]
 
-          all_chars = upper + lower + digits + special
+          alphabet = upper + lower + digits + special
 
           while len(chars) < 24:
-              chars.append(secrets.choice(all_chars))
+              chars.append(secrets.choice(alphabet))
 
           secrets.SystemRandom().shuffle(chars)
+
           print("".join(chars))
           PY
           )"
 
-          printf '%s:%s\n' "$USERNAME" "$PASSWORD" | sudo chpasswd
+          echo "$USERNAME:$PASSWORD" | sudo chpasswd
 
-          # Give the RDP account admin/sudo access, equivalent to your
-          # Windows workflow's Administrators membership.
+          # Administrators-equivalent privileges.
           sudo usermod -aG sudo "$USERNAME"
 
-          # Save credentials for subsequent workflow steps.
+          # xrdp access group.
+          sudo usermod -aG ssl-cert xrdp
+
+          # Explicitly create home/session files.
+          sudo mkdir -p "/home/$USERNAME"
+
+          sudo chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
+
+          # Save credentials for later workflow steps.
           {
             echo "RDP_USER=$USERNAME"
             echo "RDP_PASSWORD=$PASSWORD"
           } >> "$GITHUB_ENV"
 
-          echo "RDP user created successfully."
+          echo
+          echo "RDP account created."
 
+      # ------------------------------------------------------------
+      # 4. CONFIGURE THE XRDP SESSION
+      #
+      # Force:
+      #   Xorg
+      #   GNOME Flashback
+      #   Metacity
+      #
+      # Do NOT start GNOME Shell directly.
+      # ------------------------------------------------------------
+      - name: Configure xRDP Session
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          USERNAME="RDP"
+          HOME_DIR="/home/$USERNAME"
+
+          # --------------------------------------------------------
+          # User session
+          # --------------------------------------------------------
+          sudo -u "$USERNAME" tee "$HOME_DIR/.xsession" >/dev/null <<'EOF'
+          #!/bin/sh
+
+          export XDG_SESSION_TYPE=x11
+          export XDG_CURRENT_DESKTOP=GNOME-Flashback:GNOME
+          export XDG_SESSION_DESKTOP=gnome-flashback-metacity
+
+          export GNOME_SHELL_SESSION_MODE=classic
+
+          unset DBUS_SESSION_BUS_ADDRESS
+          unset WAYLAND_DISPLAY
+
+          exec dbus-run-session -- gnome-session --session=gnome-flashback-metacity
+          EOF
+
+          sudo chmod 700 "$HOME_DIR/.xsession"
+
+          # --------------------------------------------------------
+          # Profile environment
+          # --------------------------------------------------------
+          sudo -u "$USERNAME" tee "$HOME_DIR/.profile" >/dev/null <<'EOF'
+          # xRDP/X11 session
+          export XDG_SESSION_TYPE=x11
+          export XDG_CURRENT_DESKTOP=GNOME-Flashback:GNOME
+          export XDG_SESSION_DESKTOP=gnome-flashback-metacity
+          export GDK_BACKEND=x11
+          export QT_X11_NO_MITSHM=1
+
+          # Prevent Wayland from being selected.
+          unset WAYLAND_DISPLAY
+          EOF
+
+          # --------------------------------------------------------
+          # xrdp startwm
+          #
+          # Explicitly launch the user's .xsession rather than
+          # relying on the machine's default graphical login.
+          # --------------------------------------------------------
+          sudo tee /etc/xrdp/startwm.sh >/dev/null <<'EOF'
+          #!/bin/sh
+
+          if [ -r /etc/profile ]; then
+              . /etc/profile
+          fi
+
+          if [ -r "$HOME/.profile" ]; then
+              . "$HOME/.profile"
+          fi
+
+          # xrdp uses an X11 display, so never try to start Wayland.
+          unset WAYLAND_DISPLAY
+
+          # Start the user's X session.
+          if [ -x "$HOME/.xsession" ]; then
+              exec "$HOME/.xsession"
+          fi
+
+          exec /usr/bin/gnome-session --session=gnome-flashback-metacity
+          EOF
+
+          sudo chmod 755 /etc/xrdp/startwm.sh
+
+          # --------------------------------------------------------
+          # Force xorgxrdp backend.
+          # --------------------------------------------------------
+          sudo tee /etc/xrdp/xorg.conf >/dev/null <<'EOF'
+          Section "ServerLayout"
+              Identifier "Xorg"
+              Screen 0 "Screen0"
+          EndSection
+
+          Section "Monitor"
+              Identifier "Monitor0"
+          EndSection
+
+          Section "Device"
+              Identifier "VideoCard0"
+              Driver "xrdpdev"
+          EndSection
+
+          Section "Screen"
+              Identifier "Screen0"
+              Device "VideoCard0"
+              Monitor "Monitor0"
+              DefaultDepth 24
+              SubSection "Display"
+                  Depth 24
+              EndSubSection
+          EndSection
+          EOF
+
+          # --------------------------------------------------------
+          # Make sure xrdp is allowed to access its TLS material.
+          # --------------------------------------------------------
+          sudo usermod -aG ssl-cert xrdp
+
+          # Stop xrdp until Tailscale IP is available.
+          sudo systemctl disable --now xrdp || true
+          sudo systemctl disable --now xrdp-sesman || true
+
+          echo
+          echo "=== SESSION FILE ==="
+          sudo cat "$HOME_DIR/.xsession"
+
+          echo
+          echo "=== XRDP STARTWM ==="
+          sudo cat /etc/xrdp/startwm.sh
+
+      # ------------------------------------------------------------
+      # 5. INSTALL TAILSCALE
+      # ------------------------------------------------------------
       - name: Install Tailscale
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
           curl -fsSL https://tailscale.com/install.sh | sh
 
           sudo systemctl enable --now tailscaled
 
+          echo
+          echo "=== TAILSCALE VERSION ==="
           tailscale version
 
-      - name: Establish Tailscale Connection
+      # ------------------------------------------------------------
+      # 6. CONNECT TAILSCALE
+      # ------------------------------------------------------------
+      - name: Connect Tailscale
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
           HOSTNAME="gh-ubuntu-rdp-${GITHUB_RUN_ID}"
 
@@ -192,107 +328,18 @@ jobs:
             --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
             --hostname="$HOSTNAME"
 
+          echo
           echo "=== TAILSCALE STATUS ==="
           sudo tailscale status
-          echo "========================"
-
-          TS_IP=""
-
-          for i in {1..20}; do
-            TS_IP="$(sudo tailscale ip -4 | head -n1 || true)"
-
-            if [ -n "$TS_IP" ]; then
-              break
-            fi
-
-            echo "Waiting for Tailscale IP..."
-            sleep 3
-          done
-
-          if [ -z "$TS_IP" ]; then
-            echo "Tailscale IP was not assigned."
-            sudo tailscale status
-            exit 1
-          fi
-
-          echo "TAILSCALE_IP=$TS_IP" >> "$GITHUB_ENV"
-
-          echo "Tailscale IPv4: $TS_IP"
-
-      - name: Restrict RDP to Tailscale
-        shell: bash
-        run: |
-          set -e
-
-          # Ensure UFW exists.
-          sudo apt-get install -y ufw
-
-          # Default policy.
-          sudo ufw default deny incoming
-          sudo ufw default allow outgoing
-
-          # Allow RDP ONLY through the Tailscale interface.
-          sudo ufw allow in on tailscale0 \
-            to any port 3389 \
-            proto tcp
-
-          sudo ufw --force enable
-
-          echo
-          echo "=== FIREWALL ==="
-          sudo ufw status verbose
-          echo "================"
-
-      - name: Verify RDP Service
-        shell: bash
-        run: |
-          set -e
-
-          echo "=== XRDP LISTEN ==="
-          sudo ss -lntp | grep ':3389' || true
-
-          echo
-          echo "=== XRDP SERVICE ==="
-          sudo systemctl --no-pager status xrdp
 
           echo
           echo "=== TAILSCALE IP ==="
-          echo "$TAILSCALE_IP"
 
-          echo
-          echo "=== LOCAL TCP TEST ==="
-          if nc -z -w 5 "$TAILSCALE_IP" 3389; then
-            echo "RDP port 3389 is reachable."
-          else
-            echo "RDP port 3389 test failed."
-            sudo ss -lntp
-            sudo ufw status verbose
-            exit 1
-          fi
+          TS_IP=""
 
-      - name: Show RDP Access
-        shell: bash
-        run: |
-          echo
-          echo "=========================================="
-          echo "         UBUNTU DESKTOP RDP ACCESS"
-          echo "=========================================="
-          echo "Address : $TAILSCALE_IP"
-          echo "Port    : 3389"
-          echo "Username: $RDP_USER"
-          echo "Password: $RDP_PASSWORD"
-          echo "Desktop : Ubuntu GNOME"
-          echo "Display : Xorg"
-          echo "=========================================="
-          echo
+          for attempt in $(seq 1 30); do
+            TS_IP="$(sudo tailscale ip -4 | head -n1 | tr -d '\r\n' || true)"
 
-      - name: Maintain Connection
-        shell: bash
-        run: |
-          echo "RDP session is active."
-          echo "The GitHub-hosted runner has a maximum job runtime of 360 minutes."
-
-          while true; do
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Ubuntu RDP Active"
-            sleep 300
-          done
+            if [ -n "$TS_IP" ]; then
+              break
+```
