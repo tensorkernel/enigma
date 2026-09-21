@@ -1,4 +1,3 @@
-```yaml
 name: Ubuntu 26.04 Desktop RDP
 
 on:
@@ -342,4 +341,197 @@ jobs:
 
             if [ -n "$TS_IP" ]; then
               break
-```
+            fi
+
+            echo "Waiting for Tailscale IP ($attempt/30)..."
+            sleep 2
+          done
+
+          if [ -z "$TS_IP" ]; then
+            echo "ERROR: Tailscale did not provide an IPv4 address."
+            sudo tailscale status
+            exit 1
+          fi
+
+          echo "TAILSCALE_IP=$TS_IP" >> "$GITHUB_ENV"
+
+          echo "Tailscale IPv4: $TS_IP"
+
+      # ------------------------------------------------------------
+      # 7. BIND XRDP ONLY TO TAILSCALE
+      #
+      # Instead of exposing 3389 on every interface, xrdp listens
+      # specifically on the Tailscale IPv4 address.
+      # ------------------------------------------------------------
+      - name: Bind xRDP to Tailscale
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          TS_IP="$TAILSCALE_IP"
+
+          sudo cp /etc/xrdp/xrdp.ini /etc/xrdp/xrdp.ini.backup
+
+          sudo sed -i \
+            -E "s/^address=.*/address=${TS_IP}/" \
+            /etc/xrdp/xrdp.ini
+
+          # Make sure the port is correct.
+          sudo sed -i \
+            -E 's/^port=.*/port=3389/' \
+            /etc/xrdp/xrdp.ini
+
+          echo
+          echo "=== XRDP NETWORK CONFIG ==="
+          sudo grep -E '^(address|port|security_layer|crypt_level)=' \
+            /etc/xrdp/xrdp.ini || true
+
+          echo
+          echo "xrdp will listen on:"
+          echo "$TS_IP:3389"
+
+      # ------------------------------------------------------------
+      # 8. START XRDP
+      # ------------------------------------------------------------
+      - name: Start xRDP
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Make sure the system knows xrdp can start after boot.
+          sudo systemctl daemon-reload
+
+          sudo systemctl enable xrdp
+
+          sudo systemctl restart xrdp
+
+          sleep 3
+
+          echo
+          echo "=== XRDP ==="
+          sudo systemctl --no-pager --full status xrdp
+
+          echo
+          echo "=== XRDP-SESman ==="
+          sudo systemctl --no-pager --full status xrdp-sesman || true
+
+      # ------------------------------------------------------------
+      # 9. VERIFY EVERYTHING BEFORE SHOWING CREDENTIALS
+      # ------------------------------------------------------------
+      - name: Verify RDP
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "=== TAILSCALE ==="
+          sudo tailscale status
+
+          echo
+          echo "=== INTERFACES ==="
+          ip addr show tailscale0
+
+          echo
+          echo "=== XRDP LISTEN SOCKET ==="
+          sudo ss -lntp | grep ':3389'
+
+          echo
+          echo "=== XRDP CONFIG ==="
+          sudo grep -E '^(address|port)=' /etc/xrdp/xrdp.ini
+
+          echo
+          echo "=== XRDP LOG ==="
+          sudo tail -n 80 /var/log/xrdp.log || true
+
+          echo
+          echo "=== XRDP SESMAN LOG ==="
+          sudo tail -n 120 /var/log/xrdp-sesman.log || true
+
+          echo
+          echo "=== USER ==="
+          id "$RDP_USER"
+
+          echo
+          echo "=== SESSION FILE ==="
+          sudo -u "$RDP_USER" cat "/home/$RDP_USER/.xsession"
+
+          echo
+          echo "=== TCP TEST ==="
+          nc -vz -w 5 "$TAILSCALE_IP" 3389
+
+          echo
+          echo "RDP endpoint verified."
+
+      # ------------------------------------------------------------
+      # 10. PRINT ACCESS INFORMATION
+      # ------------------------------------------------------------
+      - name: RDP Access
+        shell: bash
+        run: |
+          echo
+          echo "======================================================"
+          echo "                UBUNTU 26.04 RDP"
+          echo "======================================================"
+          echo
+          echo "Host:"
+          echo "$TAILSCALE_IP"
+          echo
+          echo "Port:"
+          echo "3389"
+          echo
+          echo "Username:"
+          echo "$RDP_USER"
+          echo
+          echo "Password:"
+          echo "$RDP_PASSWORD"
+          echo
+          echo "Desktop:"
+          echo "Ubuntu GNOME Flashback / Metacity"
+          echo
+          echo "Display:"
+          echo "Xorg via xorgxrdp"
+          echo
+          echo "Network:"
+          echo "Tailscale only"
+          echo
+          echo "======================================================"
+          echo "Use Microsoft Remote Desktop and connect to:"
+          echo "$TAILSCALE_IP:3389"
+          echo "======================================================"
+
+      # ------------------------------------------------------------
+      # 11. KEEP RUNNER ALIVE
+      # ------------------------------------------------------------
+      - name: Keep RDP Alive
+        shell: bash
+        run: |
+          set -u
+
+          echo
+          echo "RDP SESSION IS READY."
+          echo "Runner maximum job duration: 360 minutes."
+          echo
+
+          while true; do
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Ubuntu RDP active"
+
+            # Detect an unexpected xrdp failure immediately.
+            if ! sudo systemctl is-active --quiet xrdp; then
+              echo "WARNING: xrdp stopped."
+
+              echo
+              echo "=== XRDP STATUS ==="
+              sudo systemctl --no-pager status xrdp || true
+
+              echo
+              echo "=== XRDP LOG ==="
+              sudo tail -n 100 /var/log/xrdp.log || true
+
+              echo
+              echo "=== SESMAN LOG ==="
+              sudo tail -n 150 /var/log/xrdp-sesman.log || true
+
+              sudo systemctl restart xrdp || true
+            fi
+
+            sleep 30
+          done
