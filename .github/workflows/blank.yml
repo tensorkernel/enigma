@@ -1,113 +1,298 @@
-name: RDP
+name: Ubuntu Desktop RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
-    runs-on: windows-latest
-    timeout-minutes: 3600
+  ubuntu-rdp:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 360
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Show System Information
+        shell: bash
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
+          echo "=== SYSTEM ==="
+          lsb_release -a
+          echo
+          uname -a
+          echo
+          free -h
+          echo
+          df -h /
+          echo "=============="
 
-          # Remove any existing rule with the same name to avoid duplication
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          
-          # For testing, allow any incoming connection on port 3389
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
-
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect
-          Restart-Service -Name TermService -Force
-
-      - name: Create RDP User with Secure Password Good
+      - name: Install Ubuntu Desktop + xRDP
+        shell: bash
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)      # A-Z
-              Lower   = [char[]](97..122)     # a-z
-              Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126)) # Special characters
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          
-          echo "RDP_CREDS=User: RDP | Paassword: $password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "User creation has failed"
-              exit 1
-          }
+          set -e
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo apt-get update
+
+          # Ubuntu Desktop GUI
+          sudo apt-get install -y \
+            ubuntu-desktop-minimal \
+            gnome-session \
+            gnome-shell \
+            dbus-x11
+
+          # RDP server + Xorg backend
+          sudo apt-get install -y \
+            xrdp \
+            xorgxrdp \
+            xserver-xorg-core \
+            xserver-xorg-input-all \
+            xorg
+
+          # Useful utilities
+          sudo apt-get install -y \
+            curl \
+            wget \
+            unzip \
+            net-tools \
+            netcat-openbsd
+
+      - name: Configure GNOME for xRDP
+        shell: bash
+        run: |
+          set -e
+
+          # Force GDM to use Xorg rather than Wayland.
+          sudo mkdir -p /etc/gdm3
+
+          sudo tee /etc/gdm3/custom.conf >/dev/null <<'EOF'
+          [daemon]
+          WaylandEnable=false
+          EOF
+
+          # Ubuntu GNOME session used by xRDP.
+          sudo tee /usr/local/bin/ubuntu-session >/dev/null <<'EOF'
+          #!/bin/sh
+
+          export GNOME_SHELL_SESSION_MODE=ubuntu
+          export DESKTOP_SESSION=ubuntu-xorg
+          export XDG_SESSION_DESKTOP=ubuntu-xorg
+          export XDG_CURRENT_DESKTOP=ubuntu:GNOME
+          export XDG_SESSION_TYPE=x11
+
+          exec /usr/bin/gnome-session --session=ubuntu
+          EOF
+
+          sudo chmod +x /usr/local/bin/ubuntu-session
+
+          sudo update-alternatives \
+            --install /usr/bin/x-session-manager \
+            x-session-manager \
+            /usr/local/bin/ubuntu-session \
+            60
+
+          # Make sure xrdp can read its TLS certificate/key.
+          sudo usermod -aG ssl-cert xrdp
+
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
+
+          echo "=== XRDP STATUS ==="
+          sudo systemctl --no-pager status xrdp || true
+          echo "==================="
+
+      - name: Create RDP User
+        shell: bash
+        run: |
+          set -e
+
+          USERNAME="RDP"
+
+          if sudo id "$USERNAME" >/dev/null 2>&1; then
+            echo "User already exists"
+          else
+            sudo useradd \
+              --create-home \
+              --shell /bin/bash \
+              "$USERNAME"
+          fi
+
+          # Generate a 24-character password with upper/lower/numbers/symbols.
+          PASSWORD="$(python3 - <<'PY'
+          import secrets
+          import string
+
+          upper = string.ascii_uppercase
+          lower = string.ascii_lowercase
+          digits = string.digits
+          special = "!@#$%^&*_-+=?"
+
+          chars = [
+              secrets.choice(upper),
+              secrets.choice(upper),
+              secrets.choice(upper),
+              secrets.choice(upper),
+
+              secrets.choice(lower),
+              secrets.choice(lower),
+              secrets.choice(lower),
+              secrets.choice(lower),
+
+              secrets.choice(digits),
+              secrets.choice(digits),
+              secrets.choice(digits),
+              secrets.choice(digits),
+
+              secrets.choice(special),
+              secrets.choice(special),
+              secrets.choice(special),
+              secrets.choice(special),
+          ]
+
+          all_chars = upper + lower + digits + special
+
+          while len(chars) < 24:
+              chars.append(secrets.choice(all_chars))
+
+          secrets.SystemRandom().shuffle(chars)
+          print("".join(chars))
+          PY
+          )"
+
+          printf '%s:%s\n' "$USERNAME" "$PASSWORD" | sudo chpasswd
+
+          # Give the RDP account admin/sudo access, equivalent to your
+          # Windows workflow's Administrators membership.
+          sudo usermod -aG sudo "$USERNAME"
+
+          # Save credentials for subsequent workflow steps.
+          {
+            echo "RDP_USER=$USERNAME"
+            echo "RDP_PASSWORD=$PASSWORD"
+          } >> "$GITHUB_ENV"
+
+          echo "RDP user created successfully."
 
       - name: Install Tailscale
+        shell: bash
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          set -e
+
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+          sudo systemctl enable --now tailscaled
+
+          tailscale version
 
       - name: Establish Tailscale Connection
+        shell: bash
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          
-          # Wait for Tailscale to assign an IP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-      
-      - name: Verify RDP Accessibility
+          set -e
+
+          HOSTNAME="gh-ubuntu-rdp-${GITHUB_RUN_ID}"
+
+          sudo tailscale up \
+            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
+            --hostname="$HOSTNAME"
+
+          echo "=== TAILSCALE STATUS ==="
+          sudo tailscale status
+          echo "========================"
+
+          TS_IP=""
+
+          for i in {1..20}; do
+            TS_IP="$(sudo tailscale ip -4 | head -n1 || true)"
+
+            if [ -n "$TS_IP" ]; then
+              break
+            fi
+
+            echo "Waiting for Tailscale IP..."
+            sleep 3
+          done
+
+          if [ -z "$TS_IP" ]; then
+            echo "Tailscale IP was not assigned."
+            sudo tailscale status
+            exit 1
+          fi
+
+          echo "TAILSCALE_IP=$TS_IP" >> "$GITHUB_ENV"
+
+          echo "Tailscale IPv4: $TS_IP"
+
+      - name: Restrict RDP to Tailscale
+        shell: bash
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          
-          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
+          set -e
+
+          # Ensure UFW exists.
+          sudo apt-get install -y ufw
+
+          # Default policy.
+          sudo ufw default deny incoming
+          sudo ufw default allow outgoing
+
+          # Allow RDP ONLY through the Tailscale interface.
+          sudo ufw allow in on tailscale0 \
+            to any port 3389 \
+            proto tcp
+
+          sudo ufw --force enable
+
+          echo
+          echo "=== FIREWALL ==="
+          sudo ufw status verbose
+          echo "================"
+
+      - name: Verify RDP Service
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== XRDP LISTEN ==="
+          sudo ss -lntp | grep ':3389' || true
+
+          echo
+          echo "=== XRDP SERVICE ==="
+          sudo systemctl --no-pager status xrdp
+
+          echo
+          echo "=== TAILSCALE IP ==="
+          echo "$TAILSCALE_IP"
+
+          echo
+          echo "=== LOCAL TCP TEST ==="
+          if nc -z -w 5 "$TAILSCALE_IP" 3389; then
+            echo "RDP port 3389 is reachable."
+          else
+            echo "RDP port 3389 test failed."
+            sudo ss -lntp
+            sudo ufw status verbose
+            exit 1
+          fi
+
+      - name: Show RDP Access
+        shell: bash
+        run: |
+          echo
+          echo "=========================================="
+          echo "         UBUNTU DESKTOP RDP ACCESS"
+          echo "=========================================="
+          echo "Address : $TAILSCALE_IP"
+          echo "Port    : 3389"
+          echo "Username: $RDP_USER"
+          echo "Password: $RDP_PASSWORD"
+          echo "Desktop : Ubuntu GNOME"
+          echo "Display : Xorg"
+          echo "=========================================="
+          echo
 
       - name: Maintain Connection
+        shell: bash
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
-          Write-Host "==================`n"
-          
-          # Keep runner active indefinitely (or until manually cancelled)
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
-          }
+          echo "RDP session is active."
+          echo "The GitHub-hosted runner has a maximum job runtime of 360 minutes."
+
+          while true; do
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Ubuntu RDP Active"
+            sleep 300
+          done
