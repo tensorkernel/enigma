@@ -1,382 +1,113 @@
-name: macOS Latest Screen Sharing
+name: RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  workstation:
-    runs-on: macos-latest
-    timeout-minutes: 360
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
 
     steps:
-      - name: Inspect macOS Runner
-        shell: bash
+      - name: Configure Core RDP Settings
         run: |
-          set -euxo pipefail
+          # Enable Remote Desktop and disable Network Level Authentication (if needed)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 0 -Force
 
-          echo "=================================================="
-          echo "OPERATING SYSTEM"
-          echo "=================================================="
-          sw_vers
+          # Remove any existing rule with the same name to avoid duplication
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          
+          # For testing, allow any incoming connection on port 3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
 
-          echo
-          echo "=================================================="
-          echo "KERNEL / ARCHITECTURE"
-          echo "=================================================="
-          uname -a
-          uname -m
+          # (Optional) Restart the Remote Desktop service to ensure changes take effect
+          Restart-Service -Name TermService -Force
 
-          echo
-          echo "=================================================="
-          echo "HARDWARE"
-          echo "=================================================="
-          system_profiler SPHardwareDataType
-
-          echo
-          echo "=================================================="
-          echo "XCODE"
-          echo "=================================================="
-          xcodebuild -version || true
-          xcode-select -p
-
-          echo
-          echo "=================================================="
-          echo "DISK"
-          echo "=================================================="
-          df -h /
-
-      - name: Select Current Xcode
-        shell: bash
+      - name: Create RDP User with Secure Password Good
         run: |
-          set -euxo pipefail
-
-          XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -n 1)"
-
-          if [ -n "$XCODE_APP" ] && [ -d "$XCODE_APP/Contents/Developer" ]; then
-            sudo xcode-select -s "$XCODE_APP/Contents/Developer"
-          fi
-
-          xcodebuild -version
-          xcode-select -p
-
-      - name: Create Workspace Directories
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          WORKSPACE="$HOME/workspace"
-
-          mkdir -p \
-            "$HOME/Desktop" \
-            "$HOME/Documents" \
-            "$HOME/Downloads" \
-            "$HOME/Pictures" \
-            "$HOME/Videos" \
-            "$HOME/Music" \
-            "$HOME/Projects" \
-            "$HOME/Code" \
-            "$HOME/Work" \
-            "$HOME/Scratch" \
-            "$HOME/.local/bin" \
-            "$HOME/.config" \
-            "$HOME/.cache" \
-            "$WORKSPACE" \
-            "$HOME/Applications"
-
-          ln -sfn "$WORKSPACE" "$HOME/Workspace"
-
-          chmod 755 \
-            "$WORKSPACE" \
-            "$HOME/Projects" \
-            "$HOME/Code" \
-            "$HOME/Work" \
-            "$HOME/Scratch"
-
-          echo "=================================================="
-          echo "WORKSPACE"
-          echo "=================================================="
-          echo "HOME:       $HOME"
-          echo "WORKSPACE:  $WORKSPACE"
-          echo "PROJECTS:   $HOME/Projects"
-          echo "CODE:       $HOME/Code"
-          echo "WORK:       $HOME/Work"
-          echo "SCRATCH:    $HOME/Scratch"
-
-          ls -ld \
-            "$HOME/Desktop" \
-            "$HOME/Documents" \
-            "$HOME/Downloads" \
-            "$HOME/Projects" \
-            "$HOME/Code" \
-            "$HOME/Work" \
-            "$HOME/Scratch" \
-            "$WORKSPACE"
-
-      - name: Create Predefined Remote User
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          REMOTE_USERNAME="RDP"
-          REMOTE_PASSWORD="admin"
-          REMOTE_FULLNAME="RDP"
-
-          echo "Creating/configuring local macOS remote user: $REMOTE_USERNAME"
-
-          if id "$REMOTE_USERNAME" >/dev/null 2>&1; then
-            echo "User already exists. Resetting its password and ensuring admin membership."
-            sudo /usr/sbin/sysadminctl \
-              -resetPasswordFor "$REMOTE_USERNAME" \
-              -newPassword "$REMOTE_PASSWORD" || true
-            sudo dseditgroup -o edit -a "$REMOTE_USERNAME" -t user admin
-          else
-            sudo /usr/sbin/sysadminctl \
-              -addUser "$REMOTE_USERNAME" \
-              -fullName "$REMOTE_FULLNAME" \
-              -password "$REMOTE_PASSWORD" \
-              -admin
-          fi
-
-          echo "Verifying account exists..."
-          id "$REMOTE_USERNAME"
-          dscl . -read "/Users/$REMOTE_USERNAME" NFSHomeDirectory UserShell
-
-          echo "Verifying password authentication..."
-          if ! dscl . -authonly "$REMOTE_USERNAME" "$REMOTE_PASSWORD"; then
-            echo "ERROR: Predefined credentials were not accepted by macOS."
-            exit 1
-          fi
-
-          echo "Predefined remote user configured successfully."
-
-      - name: Enable macOS Screen Sharing
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          REMOTE_USERNAME="RDP"
-          KICKSTART="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
-          SCREENSHARING_PLIST="/System/Library/LaunchDaemons/com.apple.screensharing.plist"
-
-          test -f "$SCREENSHARING_PLIST"
-
-          sudo launchctl enable system/com.apple.screensharing || true
-          sudo launchctl bootstrap system "$SCREENSHARING_PLIST" 2>/dev/null || \
-            sudo launchctl load -w "$SCREENSHARING_PLIST" 2>/dev/null || true
-
-          if [ -x "$KICKSTART" ]; then
-            sudo "$KICKSTART" \
-              -activate \
-              -configure \
-              -access -on \
-              -users "$REMOTE_USERNAME" \
-              -privs -all \
-              -restart -agent || true
-          fi
-
-          sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
-
-          echo
-          echo "=================================================="
-          echo "SCREEN SHARING"
-          echo "=================================================="
-          sudo launchctl print system/com.apple.screensharing 2>/dev/null | sed -n '1,80p' || true
-
-          echo
-          echo "=================================================="
-          echo "VNC LISTENER"
-          echo "=================================================="
-          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || true
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)      # A-Z
+              Lower   = [char[]](97..122)     # a-z
+              Number  = [char[]](48..57)      # 0-9
+              Special = ([char[]](33..47) + [char[]](58..64) +
+                         [char[]](91..96) + [char[]](123..126)) # Special characters
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          echo "RDP_CREDS=User: RDP | Paassword: $password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name "RDP")) {
+              Write-Error "User creation has failed"
+              exit 1
+          }
 
       - name: Install Tailscale
-        shell: bash
         run: |
-          set -euxo pipefail
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-          if ! command -v tailscale >/dev/null 2>&1; then
-            if command -v brew >/dev/null 2>&1; then
-              brew install --formula tailscale
-            else
-              echo "Homebrew is not available on this runner."
+      - name: Establish Tailscale Connection
+        run: |
+          # Bring up Tailscale with the provided auth key and set a unique hostname
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          # Wait for Tailscale to assign an IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
-            fi
-          fi
-
-          tailscale version
-
-      - name: Connect Tailscale
-        shell: bash
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+      
+      - name: Verify RDP Accessibility
         run: |
-          set -euxo pipefail
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          
+          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
 
-          if [ -z "${{ secrets.TAILSCALE_AUTH_KEY }}" ]; then
-            echo "ERROR: TAILSCALE_AUTH_KEY repository secret is required."
-            exit 1
-          fi
-
-          HOSTNAME="gh-macos-workstation-${GITHUB_RUN_ID}"
-
-          sudo tailscaled >/tmp/tailscaled.log 2>&1 &
-
-          for i in $(seq 1 30); do
-            if tailscale status >/dev/null 2>&1; then
-              break
-            fi
-            echo "Waiting for tailscaled... ($i/30)"
-            sleep 2
-          done
-
-          sudo tailscale up \
-            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
-            --hostname="$HOSTNAME"
-
-          TS_IP=""
-
-          for i in $(seq 1 30); do
-            TS_IP="$(tailscale ip -4 2>/dev/null | head -n 1 | tr -d '\r\n' || true)"
-
-            if [ -n "$TS_IP" ]; then
-              break
-            fi
-
-            echo "Waiting for Tailscale IP... ($i/30)"
-            sleep 2
-          done
-
-          if [ -z "$TS_IP" ]; then
-            echo "ERROR: No Tailscale IPv4 address."
-            tailscale status || true
-            cat /tmp/tailscaled.log || true
-            exit 1
-          fi
-
-          echo "TAILSCALE_IP=$TS_IP" >> "$GITHUB_ENV"
-
-          echo
-          echo "=================================================="
-          echo "TAILSCALE"
-          echo "=================================================="
-          tailscale status
-          echo
-          echo "IPv4: $TS_IP"
-
-      - name: Validate Remote Access
-        shell: bash
+      - name: Maintain Connection
         run: |
-          set -euxo pipefail
-
-          echo "=================================================="
-          echo "REMOTE ACCESS"
-          echo "=================================================="
-
-          echo "macOS:"
-          sw_vers
-
-          echo
-          echo "Architecture:"
-          uname -m
-
-          echo
-          echo "Screen Sharing service:"
-          sudo launchctl print system/com.apple.screensharing 2>/dev/null | sed -n '1,50p' || true
-
-          echo
-          echo "VNC listener:"
-          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || true
-
-          echo
-          echo "Tailscale:"
-          tailscale status
-          echo
-          echo "Tailscale IP: $TAILSCALE_IP"
-
-          echo
-          echo "Workspace:"
-          ls -ld \
-            "$HOME/Desktop" \
-            "$HOME/Documents" \
-            "$HOME/Downloads" \
-            "$HOME/Projects" \
-            "$HOME/Code" \
-            "$HOME/Work" \
-            "$HOME/Scratch" \
-            "$HOME/workspace"
-
-      - name: Show Remote Access Information
-        shell: bash
-        run: |
-          echo
-          echo "================================================================"
-          echo "                    macOS WORKSTATION READY"
-          echo "================================================================"
-          echo
-          echo "MACOS:"
-          sw_vers -productVersion
-          echo
-          echo "ARCHITECTURE:"
-          uname -m
-          echo
-          echo "REMOTE PROTOCOL:"
-          echo "macOS Screen Sharing / VNC"
-          echo
-          echo "VNC HOST:"
-          echo "$TAILSCALE_IP:5900"
-          echo
-          echo "USERNAME:"
-          echo "RDP"
-          echo
-          echo "PASSWORD:"
-          echo "admin"
-          echo
-          echo "WORKSPACE:"
-          echo "$HOME/workspace"
-          echo
-          echo "PROJECTS:"
-          echo "$HOME/Projects"
-          echo
-          echo "CODE:"
-          echo "$HOME/Code"
-          echo
-          echo "NETWORK:"
-          echo "Tailscale"
-          echo
-          echo "================================================================"
-
-      - name: Keep Workstation Alive
-        shell: bash
-        run: |
-          set -u
-
-          echo
-          echo "=================================================="
-          echo "REMOTE WORKSTATION ACTIVE"
-          echo "=================================================="
-          echo
-          echo "GitHub-hosted runner maximum job duration: 360 minutes."
-          echo "VNC: $TAILSCALE_IP:5900"
-          echo "WORKSPACE: $HOME/workspace"
-          echo
-
-          while true; do
-            NOW="$(date '+%Y-%m-%d %H:%M:%S')"
-            echo "[$NOW] Workstation active"
-
-            if ! tailscale status >/dev/null 2>&1; then
-              echo "[$NOW] Tailscale unavailable. Restarting tailscaled..."
-              sudo pkill tailscaled || true
-              sudo tailscaled >/tmp/tailscaled.log 2>&1 &
-              sleep 3
-              sudo tailscale up \
-                --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
-                --hostname="gh-macos-workstation-${GITHUB_RUN_ID}" || true
-            fi
-
-            if ! sudo lsof -nP -iTCP:5900 -sTCP:LISTEN >/dev/null 2>&1; then
-              echo "[$NOW] Screen Sharing is not listening on TCP 5900. Restarting service..."
-              sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
-              sleep 3
-              sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || true
-            fi
-
-            sleep 30
-          done
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $(echo $env:RDP_CREDS)"
+          Write-Host "==================`n"
+          
+          # Keep runner active indefinitely (or until manually cancelled)
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
