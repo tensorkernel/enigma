@@ -1,19 +1,26 @@
-name: Ubuntu Workstation RDP
+name: macOS Latest Workstation VNC
 
 on:
   workflow_dispatch:
 
 jobs:
   workstation:
-    runs-on: ubuntu-24.04
+    # As of Oct 1, 2026, macos-latest points to the current macOS 26
+    # Apple-silicon GitHub-hosted image.
+    runs-on: macos-latest
     timeout-minutes: 360
 
-    steps:
+    env:
+      REMOTE_USER: RDP
+      REMOTE_PASSWORD: admin
+      VNC_PASSWORD: admin
+      TS_HOSTNAME: gh-macos-workstation-${{ github.run_id }}
 
+    steps:
       # ============================================================
-      # 1. INSPECT THE GITHUB RUNNER
+      # 1. INSPECT RUNNER
       # ============================================================
-      - name: Inspect Runner
+      - name: Inspect macOS Runner
         shell: bash
         run: |
           set -euxo pipefail
@@ -21,567 +28,240 @@ jobs:
           echo "=================================================="
           echo "OPERATING SYSTEM"
           echo "=================================================="
-          cat /etc/os-release
+          sw_vers
 
           echo
           echo "=================================================="
-          echo "KERNEL"
+          echo "KERNEL / ARCHITECTURE"
           echo "=================================================="
           uname -a
-
-          echo
-          echo "=================================================="
-          echo "ARCHITECTURE"
-          echo "=================================================="
           uname -m
-          dpkg --print-architecture
 
           echo
           echo "=================================================="
-          echo "CPU"
+          echo "HARDWARE"
           echo "=================================================="
-          nproc
-          lscpu | sed -n '1,25p'
+          system_profiler SPHardwareDataType
+
+          echo
+          echo "=================================================="
+          echo "GRAPHICS"
+          echo "=================================================="
+          system_profiler SPDisplaysDataType || true
 
           echo
           echo "=================================================="
           echo "MEMORY"
           echo "=================================================="
-          free -h
+          vm_stat
+          sysctl hw.memsize
 
           echo
           echo "=================================================="
           echo "DISK"
           echo "=================================================="
-          df -h
+          df -h /
 
           echo
           echo "=================================================="
-          echo "PCI DEVICES"
+          echo "XCODE"
           echo "=================================================="
-          lspci || true
+          xcodebuild -version || true
+          xcode-select -p
 
       # ============================================================
-      # 2. UPDATE APT
+      # 2. SELECT CURRENT XCODE
       # ============================================================
-      - name: Prepare APT
+      - name: Select Current Xcode
         shell: bash
         run: |
           set -euxo pipefail
 
-          export DEBIAN_FRONTEND=noninteractive
+          if [ -d "/Applications/Xcode_26.6.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          fi
 
-          sudo dpkg --configure -a || true
-
-          sudo apt-get update
-
-          sudo apt-get \
-            -y \
-            --fix-broken \
-            install
+          xcodebuild -version
+          xcode-select -p
 
       # ============================================================
-      # 3. LIGHTWEIGHT DESKTOP + XORG + XRDP
-      #
-      # LXDE/Openbox is deliberately used instead of GNOME.
-      # It avoids the GNOME/Wayland/X11 session problems encountered
-      # in the earlier workflow.
+      # 3. PREPARE HOMEBREW
       # ============================================================
-      - name: Install Desktop and RDP Stack
+      - name: Prepare Homebrew
         shell: bash
         run: |
           set -euxo pipefail
 
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            lxde-core \
-            openbox \
-            openbox-lxde-session \
-            lxsession \
-            lxpanel \
-            pcmanfm \
-            lxterminal \
-            lxappearance \
-            lxpolkit \
-            polkitd \
-            xorg \
-            xserver-xorg-core \
-            xserver-xorg-input-all \
-            xserver-xorg-video-all \
-            xorgxrdp \
-            xrdp \
-            xauth \
-            x11-xserver-utils \
-            x11-utils \
-            x11-apps \
-            dbus \
-            dbus-x11 \
-            dbus-user-session \
-            libpam-systemd \
-            xdg-utils \
-            xdg-user-dirs \
-            desktop-file-utils \
-            shared-mime-info
-
-          sudo apt-get install -f -y
-
-          echo
-          echo "LXDE:"
-          command -v startlxde
-
-          echo
-          echo "Openbox:"
-          command -v openbox
-
-          echo
-          echo "xrdp:"
-          command -v xrdp
-
-          echo
-          echo "xorgxrdp:"
-          dpkg-query -W xorgxrdp
+          brew --version
+          brew config
+          brew update
 
       # ============================================================
-      # 4. DESKTOP INTEGRATION
-      # ============================================================
-      - name: Install Desktop Integration
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            xdg-desktop-portal \
-            xdg-desktop-portal-gtk \
-            gvfs \
-            gvfs-backends \
-            udisks2 \
-            file-roller \
-            gnome-keyring \
-            libsecret-1-0 \
-            seahorse \
-            dconf-cli \
-            gsettings-desktop-schemas \
-            xclip \
-            xsel
-
-      # ============================================================
-      # 5. ELECTRON / CHROMIUM / DESKTOP APP RUNTIMES
-      # ============================================================
-      - name: Install Desktop App Runtime Libraries
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            libnss3 \
-            libnspr4 \
-            libatk1.0-0t64 \
-            libatk-bridge2.0-0t64 \
-            libcups2t64 \
-            libgtk-3-0t64 \
-            libgtk-4-1 \
-            libgdk-pixbuf-2.0-0 \
-            libdrm2 \
-            libgbm1 \
-            libx11-6 \
-            libx11-xcb1 \
-            libxcb1 \
-            libxcb-dri3-0 \
-            libxcb-shm0 \
-            libxcb-render0 \
-            libxcb-xfixes0 \
-            libxcb-randr0 \
-            libxcb-keysyms1 \
-            libxcb-util1 \
-            libxcb-image0 \
-            libxcb-icccm4 \
-            libxcb-sync1 \
-            libxcb-xkb1 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxfixes3 \
-            libxrandr2 \
-            libxss1 \
-            libxtst6 \
-            libxkbcommon0 \
-            libxkbcommon-x11-0 \
-            libpango-1.0-0 \
-            libpangocairo-1.0-0 \
-            libpangoft2-1.0-0 \
-            libfontconfig1 \
-            libfreetype6 \
-            libexpat1 \
-            libnotify4 \
-            libglib2.0-0t64 \
-            libdbus-1-3 \
-            libatomic1 \
-            libcurl4 \
-            libssl3t64 \
-            libfuse2t64
-
-      # ============================================================
-      # 6. GRAPHICS USERSPACE
-      #
-      # GitHub's VM does not provide a physical NVIDIA/AMD GPU that
-      # we should replace with a custom kernel driver. Install the
-      # Mesa/X11/Vulkan userspace stack instead.
-      # ============================================================
-      - name: Install Graphics and Video Stack
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            mesa-utils \
-            mesa-utils-extra \
-            mesa-vulkan-drivers \
-            libgl1 \
-            libegl1 \
-            libgles2 \
-            libgbm1 \
-            libdrm2 \
-            libglx-mesa0 \
-            libgl1-mesa-dri \
-            libegl-mesa0 \
-            libva2 \
-            libva-drm2 \
-            libva-x11-2 \
-            mesa-va-drivers \
-            vainfo \
-            vulkan-tools \
-            libvulkan1
-
-          echo
-          echo "=== OpenGL ==="
-          glxinfo -B || true
-
-          echo
-          echo "=== Vulkan ==="
-          vulkaninfo --summary || true
-
-          echo
-          echo "=== VA-API ==="
-          vainfo || true
-
-      # ============================================================
-      # 7. AUDIO / MULTIMEDIA
-      # ============================================================
-      - name: Install Audio and Multimedia
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            pipewire \
-            pipewire-audio \
-            pipewire-pulse \
-            pipewire-alsa \
-            pipewire-jack \
-            pipewire-module-xrdp \
-            wireplumber \
-            pavucontrol \
-            alsa-utils \
-            pulseaudio-utils \
-            libasound2t64 \
-            libasound2-plugins \
-            ffmpeg \
-            v4l-utils \
-            gstreamer1.0-tools \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-libav
-
-      # ============================================================
-      # 8. FONTS / LOCALE
-      # ============================================================
-      - name: Configure Fonts and Locale
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            locales \
-            fonts-noto-core \
-            fonts-noto-cjk \
-            fonts-noto-color-emoji \
-            fonts-dejavu \
-            fonts-liberation \
-            fonts-urw-base35
-
-          sudo sed -i \
-            's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' \
-            /etc/locale.gen
-
-          sudo locale-gen en_US.UTF-8
-
-          sudo update-locale \
-            LANG=en_US.UTF-8 \
-            LANGUAGE=en_US:en \
-            LC_ALL=en_US.UTF-8
-
-          sudo fc-cache -f
-
-      # ============================================================
-      # 9. GENERAL DEVELOPMENT / SYSTEM UTILITIES
+      # 4. DEVELOPER / SECURITY / MEDIA UTILITIES
       # ============================================================
       - name: Install Developer Utilities
         shell: bash
         run: |
           set -euxo pipefail
 
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            build-essential \
-            gcc \
-            g++ \
-            make \
-            cmake \
-            ninja-build \
-            pkg-config \
-            autoconf \
-            automake \
-            libtool \
-            clang \
-            lldb \
-            gdb \
-            valgrind \
-            strace \
-            ltrace \
-            git \
+          brew install \
             git-lfs \
-            openssh-client \
-            rsync \
-            tmux \
-            screen \
-            htop \
-            btop \
-            tree \
-            ripgrep \
-            fd-find \
-            fzf \
             jq \
             yq \
+            ripgrep \
+            fd \
+            fzf \
             wget \
-            curl \
             aria2 \
-            unzip \
-            zip \
-            p7zip-full \
-            xz-utils \
-            zstd \
-            lz4 \
-            bzip2 \
-            gzip \
-            tar \
-            patch \
-            diffutils \
+            tree \
+            tmux \
+            htop \
+            btop \
             shellcheck \
             direnv \
             socat \
-            net-tools \
-            iproute2 \
-            iputils-ping \
-            dnsutils \
-            netcat-openbsd \
-            traceroute \
-            vim \
+            rsync \
+            p7zip \
+            xz \
+            zstd \
+            lz4 \
+            ffmpeg \
+            cmake \
+            ninja \
+            pkgconf \
+            autoconf \
+            automake \
+            libtool \
+            openssl@3 \
+            gnupg \
             neovim \
-            nano
+            vim \
+            nano \
+            ca-certificates \
+            tailscale \
+            pnpm \
+            bun \
+            go \
+            rust
 
           git lfs install --system || true
 
       # ============================================================
-      # 10. PYTHON
+      # 5. BROWSER + WEB DRIVER STACK
       # ============================================================
-      - name: Prepare Python
+      - name: Install Browsers and Web Drivers
         shell: bash
         run: |
           set -euxo pipefail
 
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            python3 \
-            python3-dev \
-            python3-pip \
-            python3-venv \
-            python3-setuptools \
-            python3-wheel \
-            python-is-python3
-
-          python3 --version
-          python3 -m pip --version
-
-      # ============================================================
-      # 11. NODE / JAVASCRIPT
-      #
-      # GitHub's Ubuntu image already includes Node/npm and many
-      # runtimes. Add pnpm/bun while preserving the baked-in tools.
-      # ============================================================
-      - name: Prepare Node Environment
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          node --version
-          npm --version
-
-          sudo npm install -g pnpm bun
+          brew install chromedriver geckodriver
+          brew install --cask google-chrome firefox
 
           echo
-          echo "pnpm:"
-          pnpm --version
+          echo "=== BROWSERS ==="
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version || true
+          "/Applications/Firefox.app/Contents/MacOS/firefox" --version || true
 
           echo
-          echo "bun:"
-          bun --version
-
-      # ============================================================
-      # 12. DOCKER
-      #
-      # Docker is normally already present on GitHub's Ubuntu image.
-      # Only install the distro package if it is absent.
-      # ============================================================
-      - name: Prepare Docker
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          if ! command -v docker >/dev/null 2>&1; then
-            export DEBIAN_FRONTEND=noninteractive
-            sudo apt-get install -y docker.io
-          fi
-
-          docker --version
-
-          if getent group docker >/dev/null 2>&1; then
-            echo "Docker group exists."
-          fi
-
-      # ============================================================
-      # 13. CODE / GITHUB CLI VALIDATION
-      # ============================================================
-      - name: Validate Built In Developer Tools
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "Git:"
-          git --version
-
-          echo
-          echo "GitHub CLI:"
-          gh --version | head -n 1 || true
-
-          echo
-          echo "Node:"
-          node --version
-
-          echo
-          echo "Python:"
-          python3 --version
-
-          echo
-          echo "Docker:"
-          docker --version
-
-          echo
-          echo "Browser binaries:"
-          google-chrome --version || true
-          chromium --version || true
-          firefox --version || true
-
-          echo
-          echo "Web drivers:"
+          echo "=== WEB DRIVERS ==="
           chromedriver --version || true
           geckodriver --version || true
 
       # ============================================================
-      # 14. CREATE RDP USER
+      # 6. GRAPHICS / METAL / VULKAN USERSPACE
       # ============================================================
-      - name: Create RDP User
+      - name: Install Graphics Tools
         shell: bash
         run: |
           set -euxo pipefail
 
-          USERNAME="RDP"
-          PASSWORD="admin"
-
-          if ! id "$USERNAME" >/dev/null 2>&1; then
-            sudo useradd \
-              --create-home \
-              --shell /bin/bash \
-              "$USERNAME"
-          fi
-
-          # Fixed password requested.
-          echo "$USERNAME:$PASSWORD" | sudo chpasswd
-
-          # Do not expire this temporary runner account.
-          sudo chage -M -1 "$USERNAME"
-          sudo chage -E -1 "$USERNAME"
-
-          # Administrative access.
-          sudo usermod -aG sudo "$USERNAME"
-
-          # xrdp certificate access.
-          sudo usermod -aG ssl-cert xrdp
-
-          # Useful device/application groups if provided by the runner.
-          for GROUP in \
-            audio \
-            video \
-            render \
-            input \
-            plugdev \
-            dialout \
-            netdev \
-            docker; do
-
-            if getent group "$GROUP" >/dev/null 2>&1; then
-              sudo usermod -aG "$GROUP" "$USERNAME"
-            fi
-          done
-
-          # Passwordless sudo for this ephemeral workstation.
-          sudo tee /etc/sudoers.d/RDP >/dev/null <<'EOF'
-          RDP ALL=(ALL) NOPASSWD:ALL
-          EOF
-
-          sudo chmod 0440 /etc/sudoers.d/RDP
-          sudo visudo -cf /etc/sudoers.d/RDP
-
-          # Keep systemd user services alive where supported.
-          sudo loginctl enable-linger "$USERNAME" || true
+          brew install molten-vk vulkan-tools
 
           echo
-          echo "=== RDP USER ==="
-          id "$USERNAME"
+          echo "=== METAL / DISPLAY ==="
+          system_profiler SPDisplaysDataType || true
+
+          echo
+          echo "=== VULKAN ==="
+          vulkaninfo --summary || true
 
       # ============================================================
-      # 15. CREATE DIRECTORY STRUCTURE
+      # 7. PYTHON / NODE VALIDATION
       # ============================================================
-      - name: Create Workstation Paths
+      - name: Prepare Language Runtimes
         shell: bash
         run: |
           set -euxo pipefail
 
-          USERNAME="RDP"
-          HOME_DIR="/home/$USERNAME"
+          echo "=== PYTHON ==="
+          python3 --version
+          python3 -m pip --version
 
+          echo
+          echo "=== NODE ==="
+          node --version
+          npm --version
+          pnpm --version
+          bun --version
+
+          echo
+          echo "=== GO ==="
+          go version
+
+          echo
+          echo "=== RUST ==="
+          rustc --version
+          cargo --version
+
+      # ============================================================
+      # 8. DOCKER CLIENT / OPTIONAL COLIMA
+      # ============================================================
+      - name: Prepare Container Tooling
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          brew install docker docker-compose colima
+
+          echo "=== DOCKER ==="
+          docker --version
+          docker compose version
+
+          echo "=== COLIMA ==="
+          colima version
+
+          # GitHub-hosted macOS runners may not expose nested
+          # virtualization reliably. Try, but do not fail the whole
+          # workstation when a VM cannot be started.
+          colima start --cpu 4 --memory 8 --disk 40 || true
+          docker info || true
+
+      # ============================================================
+      # 9. CREATE REMOTE GUI USER
+      # ============================================================
+      - name: Create Remote GUI User
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          USERNAME="$REMOTE_USER"
+          PASSWORD="$REMOTE_PASSWORD"
+
+          if id "$USERNAME" >/dev/null 2>&1; then
+            echo "User already exists: $USERNAME"
+            sudo dscl . -passwd "/Users/$USERNAME" "$PASSWORD"
+          else
+            sudo sysadminctl \
+              -addUser "$USERNAME" \
+              -fullName "Remote Workstation" \
+              -password "$PASSWORD" \
+              -admin
+          fi
+
+          sudo dseditgroup -o edit -a "$USERNAME" -t user admin || true
+
+          # Create and own the primary workstation paths.
+          HOME_DIR="/Users/$USERNAME"
           sudo mkdir -p \
             "$HOME_DIR/Desktop" \
             "$HOME_DIR/Documents" \
@@ -605,868 +285,452 @@ jobs:
             /opt/apps \
             /opt/tools
 
-          sudo chown -R \
-            "$USERNAME:$USERNAME" \
-            "$HOME_DIR"
+          sudo chown -R "$USERNAME:staff" "$HOME_DIR"
+          sudo chown "$USERNAME:staff" /workspace
+          sudo chmod 0755 /workspace /opt/apps /opt/tools
 
-          sudo chown \
-            "$USERNAME:$USERNAME" \
-            /workspace
+          sudo chown "$USERNAME:staff" "$HOME_DIR"
+          sudo chmod 0755 "$HOME_DIR"
 
-          sudo chmod 0755 \
-            /workspace \
-            /opt/apps \
-            /opt/tools
-
-          sudo -u "$USERNAME" ln -sfn \
-            /workspace \
-            "$HOME_DIR/workspace"
-
-          sudo -u "$USERNAME" \
-            env HOME="$HOME_DIR" \
-            xdg-user-dirs-update || true
+          if [ ! -L "$HOME_DIR/workspace" ]; then
+            sudo -u "$USERNAME" ln -sfn /workspace "$HOME_DIR/workspace"
+          fi
 
           echo
-          echo "=== WORKSPACE ==="
-          ls -la "$HOME_DIR"
-          ls -ld /workspace
+          echo "=== REMOTE USER ==="
+          id "$USERNAME"
+          sudo dscl . -read "/Users/$USERNAME" NFSHomeDirectory UserShell
 
       # ============================================================
-      # 16. USER ENVIRONMENT
+      # 10. USER SHELL / PATH
       # ============================================================
-      - name: Configure User Environment
+      - name: Configure Remote User Environment
         shell: bash
         run: |
           set -euxo pipefail
 
-          USERNAME="RDP"
-          HOME_DIR="/home/$USERNAME"
+          USERNAME="$REMOTE_USER"
+          HOME_DIR="/Users/$USERNAME"
 
-          sudo -u "$USERNAME" tee "$HOME_DIR/.bashrc" >/dev/null <<'EOF'
-          # Workstation environment
-
-          export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$PATH"
-
+          sudo -u "$USERNAME" tee "$HOME_DIR/.zshrc" >/dev/null <<'EOF_ZSH'
+          export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
           export WORKSPACE="/workspace"
           export PROJECTS="$HOME/Projects"
           export CODE="$HOME/Code"
-
           export CODEX_HOME="$HOME/.codex"
-
           export XDG_CONFIG_HOME="$HOME/.config"
           export XDG_CACHE_HOME="$HOME/.cache"
           export XDG_DATA_HOME="$HOME/.local/share"
-
           export EDITOR="${EDITOR:-nano}"
           export VISUAL="${VISUAL:-nano}"
 
           alias ll='ls -lah'
           alias la='ls -A'
           alias l='ls -CF'
+          EOF_ZSH
 
-          if command -v fdfind >/dev/null 2>&1; then
-            alias fd='fdfind'
-          fi
-          EOF
-
-          sudo chown \
-            "$USERNAME:$USERNAME" \
-            "$HOME_DIR/.bashrc"
-
-          sudo -u "$USERNAME" tee "$HOME_DIR/.profile" >/dev/null <<'EOF'
-          export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$PATH"
-
+          sudo -u "$USERNAME" tee "$HOME_DIR/.bashrc" >/dev/null <<'EOF_BASH'
+          export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
           export WORKSPACE="/workspace"
           export PROJECTS="$HOME/Projects"
           export CODE="$HOME/Code"
           export CODEX_HOME="$HOME/.codex"
-
           export XDG_CONFIG_HOME="$HOME/.config"
           export XDG_CACHE_HOME="$HOME/.cache"
           export XDG_DATA_HOME="$HOME/.local/share"
+          export EDITOR="${EDITOR:-nano}"
+          export VISUAL="${VISUAL:-nano}"
+          EOF_BASH
 
-          # xrdp uses X11.
-          export XDG_SESSION_TYPE=x11
-          export GDK_BACKEND=x11
-          export QT_X11_NO_MITSHM=1
-
-          unset WAYLAND_DISPLAY
-          EOF
-
-          sudo chown \
-            "$USERNAME:$USERNAME" \
-            "$HOME_DIR/.profile"
+          sudo chown "$USERNAME:staff" "$HOME_DIR/.zshrc" "$HOME_DIR/.bashrc"
 
       # ============================================================
-      # 17. CONFIGURE LXDE FOR XRDP
+      # 11. ENABLE macOS SCREEN SHARING / VNC
+      #
+      # macOS does NOT provide xrdp. Its built-in remote-control
+      # service is Screen Sharing / VNC, normally TCP 5900.
       # ============================================================
-      - name: Configure LXDE xRDP Session
+      - name: Enable macOS Screen Sharing VNC
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          USERNAME="RDP"
-          HOME_DIR="/home/$USERNAME"
+          USERNAME="$REMOTE_USER"
+          PASSWORD="$REMOTE_PASSWORD"
+          VNC_PASSWORD_VALUE="$VNC_PASSWORD"
 
-          sudo -u "$USERNAME" tee "$HOME_DIR/.xsession" >/dev/null <<'EOF'
-          #!/bin/sh
+          KICKSTART="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
+          SCREENSHARING_PLIST="/System/Library/LaunchDaemons/com.apple.screensharing.plist"
 
-          export XDG_SESSION_TYPE=x11
-          export XDG_CURRENT_DESKTOP=LXDE
-          export XDG_SESSION_DESKTOP=LXDE
-          export GDK_BACKEND=x11
-          export QT_X11_NO_MITSHM=1
+          echo "=== Screen Sharing plist ==="
+          test -f "$SCREENSHARING_PLIST"
+          ls -l "$SCREENSHARING_PLIST"
 
-          unset WAYLAND_DISPLAY
+          # Start the system Screen Sharing launchd service. The
+          # bootstrap path is used first on current macOS; the legacy
+          # load path is a compatibility fallback.
+          sudo launchctl enable system/com.apple.screensharing || true
+          sudo launchctl bootstrap system "$SCREENSHARING_PLIST" 2>/dev/null || \
+            sudo launchctl load -w "$SCREENSHARING_PLIST" 2>/dev/null || true
 
-          # Start a fresh D-Bus session and then LXDE.
-          exec dbus-run-session -- startlxde
-          EOF
-
-          sudo chmod 0755 "$HOME_DIR/.xsession"
-
-          sudo chown \
-            "$USERNAME:$USERNAME" \
-            "$HOME_DIR/.xsession"
-
-          echo
-          echo "=== LXDE COMMAND ==="
-          command -v startlxde
-
-          echo
-          echo "=== X11 SESSION FILES ==="
-          ls -la /usr/share/xsessions/
-
-          echo
-          echo "=== .xsession ==="
-          sudo cat "$HOME_DIR/.xsession"
-
-      # ============================================================
-      # 18. KEEP SYSTEM XRDP STARTUP SIMPLE
-      #
-      # Ubuntu's Xsession handles ~/.xsession for us.
-      # Do not replace it with a custom GNOME/XFCE startup script.
-      # ============================================================
-      - name: Configure xRDP
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          if [ -f /etc/xrdp/startwm.sh ]; then
-            sudo cp \
-              /etc/xrdp/startwm.sh \
-              /etc/xrdp/startwm.sh.original
+          # Configure Remote Management/VNC access when kickstart is
+          # available on this runner image.
+          if [ -x "$KICKSTART" ]; then
+            sudo "$KICKSTART" \
+              -activate \
+              -configure \
+              -access -on \
+              -users "$USERNAME" \
+              -privs -all \
+              -clientopts -setvnclegacy -vnclegacy yes \
+              -clientopts -setvncpw -vncpw "$VNC_PASSWORD_VALUE" \
+              -restart -agent || true
           fi
 
-          sudo tee /etc/xrdp/startwm.sh >/dev/null <<'EOF'
-          #!/bin/sh
-
-          if test -r /etc/profile; then
-              . /etc/profile
-          fi
-
-          if test -r /etc/default/locale; then
-              . /etc/default/locale
-              export LANG LANGUAGE
-          fi
-
-          unset WAYLAND_DISPLAY
-
-          exec /etc/X11/Xsession
-          EOF
-
-          sudo chmod 0755 /etc/xrdp/startwm.sh
-
-          sudo usermod -aG ssl-cert xrdp
+          # Ensure the launch daemon is loaded after configuration.
+          sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
 
           echo
-          echo "=== XRDP STARTWM ==="
-          sudo cat /etc/xrdp/startwm.sh
+          echo "=== Screen Sharing service ==="
+          sudo launchctl print system/com.apple.screensharing 2>/dev/null | sed -n '1,80p' || true
 
           echo
-          echo "=== XRDP CONFIG ==="
-          sudo grep -E \
-            '^(port|address|security_layer|crypt_level)=' \
-            /etc/xrdp/xrdp.ini || true
+          echo "=== PORT 5900 ==="
+          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || true
 
       # ============================================================
-      # 19. OPENAI CODEX SANDBOX
-      #
-      # OpenAI currently documents bubblewrap for Linux and an
-      # AppArmor bwrap profile specifically for Ubuntu 24.04.
-      # ============================================================
-      - name: Configure Codex Sandbox
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo apt-get install -y \
-            bubblewrap \
-            seccomp \
-            libseccomp2 \
-            apparmor \
-            apparmor-utils \
-            apparmor-profiles \
-            apparmor-profiles-extra
-
-          sudo systemctl enable --now apparmor.service || true
-
-          BWRAP_PROFILE="/usr/share/apparmor/extra-profiles/bwrap-userns-restrict"
-
-          if [ -f "$BWRAP_PROFILE" ]; then
-
-            sudo install \
-              -m 0644 \
-              "$BWRAP_PROFILE" \
-              /etc/apparmor.d/bwrap-userns-restrict
-
-            sudo apparmor_parser \
-              -r \
-              /etc/apparmor.d/bwrap-userns-restrict
-
-            sudo systemctl reload apparmor.service || true
-
-            echo "Loaded bwrap AppArmor profile."
-
-          else
-
-            echo "bwrap AppArmor profile not available."
-
-          fi
-
-          echo
-          echo "=== BWRAP ==="
-          command -v bwrap
-          bwrap --version
-
-          echo
-          echo "=== APPARMOR ==="
-          sudo aa-status || true
-
-      # ============================================================
-      # 20. INSTALL OFFICIAL CHATGPT LINUX DESKTOP
-      #
-      # Official OpenAI documentation:
-      # https://learn.chatgpt.com/docs/linux/linux-app
-      #
-      # Ubuntu/Debian x64 uses chatgpt_amd64.deb.
+      # 12. INSTALL OFFICIAL CHATGPT DESKTOP FOR macOS
       # ============================================================
       - name: Install Official ChatGPT Desktop
         shell: bash
         run: |
           set -euxo pipefail
 
-          USERNAME="RDP"
-          HOME_DIR="/home/$USERNAME"
-
-          ARCH="$(uname -m)"
-
-          if [ "$ARCH" != "x86_64" ]; then
-            echo "This workflow expects an x64 GitHub runner."
-            echo "Detected architecture: $ARCH"
-            exit 1
-          fi
-
+          USERNAME="$REMOTE_USER"
+          HOME_DIR="/Users/$USERNAME"
           DOWNLOAD_DIR="$HOME_DIR/Downloads"
-          PACKAGE="$DOWNLOAD_DIR/chatgpt_amd64.deb"
+          DMG="$DOWNLOAD_DIR/ChatGPT.dmg"
+          MOUNT_POINT="/Volumes/ChatGPT Installer"
 
           sudo -u "$USERNAME" mkdir -p "$DOWNLOAD_DIR"
 
-          # Current official OpenAI download URL documented by
-          # https://learn.chatgpt.com/docs/linux/linux-app
           curl \
             --fail \
             --location \
             --retry 5 \
             --retry-delay 2 \
-            --connect-timeout 20 \
-            --output "$PACKAGE" \
-            "https://persistent.oaistatic.com/codex-app-prod/linux/deb/latest/chatgpt_amd64.deb"
+            --connect-timeout 30 \
+            --output "$DMG" \
+            "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg"
+
+          echo "=== CHATGPT DMG ==="
+          file "$DMG"
+          shasum -a 256 "$DMG"
+
+          # Detach a stale mount from a previous retry, if present.
+          hdiutil detach "$MOUNT_POINT" -force 2>/dev/null || true
+
+          hdiutil attach "$DMG" \
+            -nobrowse \
+            -readonly \
+            -mountpoint "$MOUNT_POINT"
+
+          APP_SOURCE="$MOUNT_POINT/ChatGPT.app"
+          test -d "$APP_SOURCE"
+
+          sudo rm -rf /Applications/ChatGPT.app
+          sudo ditto "$APP_SOURCE" /Applications/ChatGPT.app
+
+          # Preserve Gatekeeper validation. Do not remove the quarantine
+          # attribute or bypass code-signing checks.
+          codesign --verify --deep --strict --verbose=2 /Applications/ChatGPT.app
+          spctl --assess --type execute --verbose=2 /Applications/ChatGPT.app
+
+          sudo chown -R root:wheel /Applications/ChatGPT.app
+          sudo chmod -R a+rX /Applications/ChatGPT.app
+
+          hdiutil detach "$MOUNT_POINT" -force
+          rm -f "$DMG"
+
+          # Desktop shortcut for the remote GUI user.
+          sudo -u "$USERNAME" ln -sfn /Applications/ChatGPT.app "$HOME_DIR/Desktop/ChatGPT.app"
 
           echo
-          echo "=== PACKAGE FILE ==="
-          file "$PACKAGE"
-
-          echo
-          echo "=== PACKAGE METADATA ==="
-          dpkg-deb --info "$PACKAGE" | sed -n '1,60p'
-
-          echo
-          echo "=== INSTALLING CHATGPT ==="
-
-          sudo apt-get install -y \
-            "$PACKAGE"
-
-          sudo apt-get install -f -y
-
-          echo
-          echo "=== CHATGPT PACKAGE ==="
-
-          dpkg-query \
-            -W \
-            -f='${Package}: ${Version}\n' \
-            chatgpt
-
-          echo
-          echo "=== CHATGPT COMMAND ==="
-          command -v chatgpt
-
-          echo
-          echo "=== CHATGPT DESKTOP ENTRY ==="
-
-          CHATGPT_DESKTOP="$(
-            find /usr/share/applications \
-              -maxdepth 1 \
-              -type f \
-              -iname '*chatgpt*.desktop' \
-              -print -quit
-          )"
-
-          if [ -n "$CHATGPT_DESKTOP" ]; then
-            echo "$CHATGPT_DESKTOP"
-
-            sudo cp \
-              "$CHATGPT_DESKTOP" \
-              "$HOME_DIR/Desktop/ChatGPT.desktop"
-
-            sudo chown \
-              "$USERNAME:$USERNAME" \
-              "$HOME_DIR/Desktop/ChatGPT.desktop"
-
-            sudo chmod 0755 \
-              "$HOME_DIR/Desktop/ChatGPT.desktop"
-          fi
-
-          # Remove the installer after successful installation.
-          rm -f "$PACKAGE"
-
-          echo
-          echo "Official ChatGPT Desktop installed."
+          echo "=== CHATGPT APP ==="
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/ChatGPT.app/Contents/Info.plist || true
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Applications/ChatGPT.app/Contents/Info.plist || true
+          codesign -dv --verbose=4 /Applications/ChatGPT.app 2>&1 | sed -n '1,35p' || true
 
       # ============================================================
-      # 21. UPDATE CHATGPT FROM THE SIGNED OPENAI APT REPOSITORY
-      #
-      # The official package configures its signed repository.
-      # This validates that apt can see the installed application.
+      # 13. INSTALL CODEX CLI
       # ============================================================
-      - name: Verify ChatGPT Repository and Package
+      - name: Install OpenAI Codex CLI
         shell: bash
         run: |
           set -euxo pipefail
 
-          sudo apt-get update
+          USERNAME="$REMOTE_USER"
+          HOME_DIR="/Users/$USERNAME"
 
-          echo
-          echo "=== CHATGPT ==="
+          sudo -u "$USERNAME" env \
+            HOME="$HOME_DIR" \
+            CODEX_HOME="$HOME_DIR/.codex" \
+            CODEX_INSTALL_DIR="$HOME_DIR/.local/bin" \
+            bash -lc 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
 
-          dpkg-query \
-            -W \
-            -f='${Package}: ${Version}\n' \
-            chatgpt
+          CODEX_BIN="$HOME_DIR/.local/bin/codex"
 
-          echo
-          echo "=== CHATGPT LOCATION ==="
-          command -v chatgpt
-
-          echo
-          echo "=== CHATGPT PACKAGE FILES ==="
-          dpkg-query \
-            -L chatgpt |
-            sed -n '1,120p'
-
-      # ============================================================
-      # 22. INSTALL OPENAI CODEX CLI
-      #
-      # Current OpenAI documentation uses:
-      # curl -fsSL https://chatgpt.com/codex/install.sh | sh
-      # ============================================================
-      - name: Install Codex CLI
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          USERNAME="RDP"
-          HOME_DIR="/home/$USERNAME"
-
-          sudo -u "$USERNAME" \
-            env \
-              HOME="$HOME_DIR" \
-              CODEX_HOME="$HOME_DIR/.codex" \
-              CODEX_INSTALL_DIR="$HOME_DIR/.local/bin" \
-              CODEX_NON_INTERACTIVE=1 \
-            bash -lc \
-              'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
-
-          sudo chown -R \
-            "$USERNAME:$USERNAME" \
-            "$HOME_DIR/.codex" \
-            "$HOME_DIR/.local" \
-            2>/dev/null || true
-
-          CODEX_BIN="$(
-            sudo -u "$USERNAME" \
-              env HOME="$HOME_DIR" \
-              bash -lc 'command -v codex 2>/dev/null || true'
-          )"
-
-          if [ -z "$CODEX_BIN" ] && [ -x "$HOME_DIR/.local/bin/codex" ]; then
-            CODEX_BIN="$HOME_DIR/.local/bin/codex"
+          if [ ! -x "$CODEX_BIN" ]; then
+            CODEX_BIN="$(sudo -u "$USERNAME" env HOME="$HOME_DIR" bash -lc 'command -v codex 2>/dev/null || true')"
           fi
 
-          if [ -z "$CODEX_BIN" ]; then
+          if [ -z "$CODEX_BIN" ] || [ ! -x "$CODEX_BIN" ]; then
             echo "ERROR: Codex CLI was not installed."
-            find "$HOME_DIR/.local" \
-              -maxdepth 4 \
-              -type f \
-              -name 'codex*' \
-              -print || true
+            find "$HOME_DIR/.local" -maxdepth 4 -type f -name 'codex*' -print || true
             exit 1
           fi
 
-          echo
-          echo "Codex:"
-          echo "$CODEX_BIN"
+          sudo ln -sfn "$CODEX_BIN" /usr/local/bin/codex
+          sudo chown -R "$USERNAME:staff" "$HOME_DIR/.codex" "$HOME_DIR/.local" 2>/dev/null || true
 
-          sudo ln -sfn \
-            "$CODEX_BIN" \
-            /usr/local/bin/codex
-
-          sudo -u "$USERNAME" \
-            env \
-              HOME="$HOME_DIR" \
-              CODEX_HOME="$HOME_DIR/.codex" \
-              PATH="$HOME_DIR/.local/bin:/usr/local/bin:$PATH" \
+          echo "=== CODEX ==="
+          sudo -u "$USERNAME" env \
+            HOME="$HOME_DIR" \
+            CODEX_HOME="$HOME_DIR/.codex" \
+            PATH="$HOME_DIR/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" \
             codex --version
 
       # ============================================================
-      # 23. VERIFY BUBBLEWRAP
+      # 14. TAILSCALE CLI-ONLY DAEMON
+      #
+      # The Homebrew formula is used here instead of the GUI cask so
+      # the daemon can run unattended on a hosted/headless Mac.
       # ============================================================
-      - name: Test Codex Sandbox
+      - name: Install and Start Tailscale
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          USERNAME="RDP"
-          HOME_DIR="/home/$USERNAME"
-
-          echo "Testing unprivileged bubblewrap..."
-
-          if sudo -u "$USERNAME" \
-            env HOME="$HOME_DIR" \
-            bwrap \
-              --unshare-all \
-              --die-with-parent \
-              --new-session \
-              --ro-bind / / \
-              --proc /proc \
-              --dev /dev \
-              /usr/bin/true; then
-
-            echo
-            echo "bubblewrap sandbox test PASSED."
-
-          else
-
-            echo
-            echo "Initial bubblewrap test failed."
-
-            echo
-            echo "AppArmor status:"
-            sudo aa-status || true
-
-            echo
-            echo "User namespace restriction:"
-            sysctl \
-              kernel.apparmor_restrict_unprivileged_userns \
-              2>/dev/null || true
-
-            # OpenAI's documented Ubuntu 24.04 fallback.
-            sudo sysctl \
-              -w \
-              kernel.apparmor_restrict_unprivileged_userns=0
-
-            if sudo -u "$USERNAME" \
-              env HOME="$HOME_DIR" \
-              bwrap \
-                --unshare-all \
-                --die-with-parent \
-                --new-session \
-                --ro-bind / / \
-                --proc /proc \
-                --dev /dev \
-                /usr/bin/true; then
-
-              echo
-              echo "bubblewrap sandbox works after fallback."
-
-            else
-
-              echo
-              echo "ERROR: bubblewrap still cannot create a user namespace."
-              exit 1
-
-            fi
-          fi
-
-      # ============================================================
-      # 24. INSTALL TAILSCALE
-      # ============================================================
-      - name: Install Tailscale
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          curl \
-            --fail \
-            --silent \
-            --show-error \
-            --location \
-            https://tailscale.com/install.sh |
-            sh
-
-          sudo systemctl enable --now tailscaled
-
-          echo
-          echo "=== TAILSCALE VERSION ==="
+          command -v tailscale
+          command -v tailscaled
           tailscale version
 
-      # ============================================================
-      # 25. CONNECT TAILSCALE
-      # ============================================================
-      - name: Connect Tailscale
-        shell: bash
-        run: |
-          set -euxo pipefail
+          sudo brew services start tailscale || true
 
-          HOSTNAME="gh-ubuntu-workstation-${GITHUB_RUN_ID}"
-
-          sudo tailscale up \
-            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" \
-            --hostname="$HOSTNAME"
-
-          TS_IP=""
-
+          # Give launchd a moment to bring up the daemon.
           for i in $(seq 1 30); do
-
-            TS_IP="$(
-              sudo tailscale ip -4 |
-              head -n 1 |
-              tr -d '\r\n' ||
-              true
-            )"
-
-            if [ -n "$TS_IP" ]; then
+            if tailscale status >/dev/null 2>&1; then
               break
             fi
-
-            echo "Waiting for Tailscale IP... ($i/30)"
             sleep 2
           done
 
-          if [ -z "$TS_IP" ]; then
-            echo
-            echo "ERROR: No Tailscale IPv4 address."
-            sudo tailscale status
-            exit 1
-          fi
+          test -n "${{ secrets.TAILSCALE_AUTH_KEY }}"
 
+          export TS_AUTH_KEY='${{ secrets.TAILSCALE_AUTH_KEY }}'
+
+          # Tailscale recommends environment-based auth-key handling so
+          # the secret is not placed literally in shell history.
+          tailscale up \
+            --auth-key="$TS_AUTH_KEY" \
+            --hostname="$TS_HOSTNAME"
+
+          unset TS_AUTH_KEY
+
+          echo
+          echo "=== TAILSCALE ==="
+          tailscale version
+          tailscale status
+          tailscale ip -4
+
+          TS_IP="$(tailscale ip -4 | head -n 1 | tr -d '\r\n')"
+          test -n "$TS_IP"
           echo "TAILSCALE_IP=$TS_IP" >> "$GITHUB_ENV"
 
-          echo
-          echo "=== TAILSCALE STATUS ==="
-          sudo tailscale status
-
-          echo
-          echo "Tailscale IPv4:"
-          echo "$TS_IP"
-
       # ============================================================
-      # 26. FIREWALL
-      #
-      # RDP is permitted only via tailscale0.
+      # 15. REMOTE ACCESS VALIDATION
       # ============================================================
-      - name: Configure Firewall
+      - name: Validate VNC and Tailscale
         shell: bash
         run: |
           set -euxo pipefail
 
-          sudo ufw default deny incoming
-          sudo ufw default allow outgoing
-
-          # Allow RDP only on the Tailscale interface.
-          sudo ufw allow in on tailscale0 \
-            to any port 3389 \
-            proto tcp
-
-          sudo ufw --force enable
+          echo "=== TAILSCALE IP ==="
+          echo "$TAILSCALE_IP"
 
           echo
-          echo "=== FIREWALL ==="
-          sudo ufw status verbose
-
-      # ============================================================
-      # 27. START XRDP AFTER NETWORK/FIREWALL IS READY
-      # ============================================================
-      - name: Start xRDP
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          sudo systemctl daemon-reload
-
-          sudo systemctl enable xrdp
-
-          sudo systemctl restart xrdp
-
-          sleep 3
+          echo "=== TAILSCALE INTERFACES ==="
+          ifconfig | grep -B2 -A6 -E '100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.' || true
 
           echo
-          echo "=== XRDP ==="
-          sudo systemctl --no-pager --full status xrdp
+          echo "=== VNC LISTENER ==="
+          for i in $(seq 1 30); do
+            if nc -z -w 2 127.0.0.1 5900 >/dev/null 2>&1; then
+              break
+            fi
+            echo "Waiting for Screen Sharing on TCP 5900... ($i/30)"
+            sleep 2
+          done
+
+          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN
 
           echo
-          echo "=== XRDP SESMAN ==="
-          sudo systemctl --no-pager --full status xrdp-sesman
+          echo "=== LOCAL TCP TEST ==="
+          nc -vz -w 5 127.0.0.1 5900
+
+          echo
+          echo "=== TAILSCALE TCP TEST ==="
+          nc -vz -w 5 "$TAILSCALE_IP" 5900 || true
+
+          echo
+          echo "=== SCREEN SHARING PLIST ==="
+          sudo launchctl print system/com.apple.screensharing 2>/dev/null | sed -n '1,120p' || true
 
       # ============================================================
-      # 28. COMPLETE VALIDATION
+      # 16. DEVELOPER TOOL VALIDATION
       # ============================================================
       - name: Validate Workstation
         shell: bash
         run: |
           set -euxo pipefail
 
-          USERNAME="RDP"
-          HOME_DIR="/home/$USERNAME"
+          echo "=================================================="
+          echo "MACOS"
+          echo "=================================================="
+          sw_vers
+          uname -a
+          uname -m
 
           echo
           echo "=================================================="
-          echo "XRDP"
+          echo "XCODE"
           echo "=================================================="
-
-          sudo systemctl is-active xrdp
-          sudo systemctl is-active xrdp-sesman
-
-          sudo ss -lntp | grep ':3389'
-
-          echo
-          echo "=================================================="
-          echo "TAILSCALE"
-          echo "=================================================="
-
-          sudo systemctl is-active tailscaled
-          sudo tailscale status
-          ip addr show tailscale0
-
-          echo
-          echo "=================================================="
-          echo "FIREWALL"
-          echo "=================================================="
-
-          sudo ufw status verbose
-
-          echo
-          echo "=================================================="
-          echo "LXDE"
-          echo "=================================================="
-
-          command -v startlxde
-          command -v lxsession
-          command -v openbox
-          command -v pcmanfm
-          command -v lxterminal
-
-          echo
-          echo "=================================================="
-          echo "X11"
-          echo "=================================================="
-
-          command -v Xorg
-          command -v xauth
-
-          echo
-          echo "=================================================="
-          echo "GRAPHICS"
-          echo "=================================================="
-
-          glxinfo -B || true
-          vulkaninfo --summary || true
-          vainfo || true
-
-          echo
-          echo "=================================================="
-          echo "AUDIO"
-          echo "=================================================="
-
-          command -v pw-cli || true
-          command -v pactl || true
-
-          dpkg-query \
-            -W \
-            -f='${Package}: ${Version}\n' \
-            pipewire \
-            wireplumber \
-            pipewire-module-xrdp
-
-          echo
-          echo "=================================================="
-          echo "BROWSER"
-          echo "=================================================="
-
-          google-chrome --version || true
-          chromium --version || true
-          firefox --version || true
-
-          echo
-          echo "=================================================="
-          echo "WEB DRIVERS"
-          echo "=================================================="
-
-          chromedriver --version || true
-          geckodriver --version || true
+          xcodebuild -version
 
           echo
           echo "=================================================="
           echo "DEVELOPER TOOLS"
           echo "=================================================="
-
           git --version
+          git-lfs --version || true
+          gh --version | head -n 1 || true
           node --version
           npm --version
+          pnpm --version
+          bun --version
           python3 --version
-          gcc --version | head -n 1
-          g++ --version | head -n 1
+          pip3 --version
           clang --version | head -n 1
           cmake --version | head -n 1
           ninja --version
+          go version
+          rustc --version
+          cargo --version
           docker --version
-          gh --version | head -n 1 || true
+          docker compose version
+          colima version
 
           echo
           echo "=================================================="
-          echo "SANDBOX"
+          echo "BROWSERS"
           echo "=================================================="
-
-          bwrap --version
-          sudo aa-status || true
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version || true
+          "/Applications/Firefox.app/Contents/MacOS/firefox" --version || true
+          chromedriver --version || true
+          geckodriver --version || true
 
           echo
           echo "=================================================="
           echo "CHATGPT"
           echo "=================================================="
-
-          dpkg-query \
-            -W \
-            -f='${Package}: ${Version}\n' \
-            chatgpt
-
-          command -v chatgpt
-
-          echo
-          echo "ChatGPT desktop files:"
-          find /usr/share/applications \
-            -maxdepth 1 \
-            -type f \
-            -iname '*chatgpt*.desktop' \
-            -print || true
+          test -d /Applications/ChatGPT.app
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /Applications/ChatGPT.app/Contents/Info.plist || true
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/ChatGPT.app/Contents/Info.plist || true
+          codesign --verify --deep --strict /Applications/ChatGPT.app
+          spctl --assess --type execute /Applications/ChatGPT.app
 
           echo
           echo "=================================================="
           echo "CODEX"
           echo "=================================================="
-
           command -v codex
-
-          sudo -u "$USERNAME" \
-            env \
-              HOME="$HOME_DIR" \
-              CODEX_HOME="$HOME_DIR/.codex" \
-              PATH="$HOME_DIR/.local/bin:/usr/local/bin:$PATH" \
+          sudo -u "$REMOTE_USER" env \
+            HOME="/Users/$REMOTE_USER" \
+            CODEX_HOME="/Users/$REMOTE_USER/.codex" \
+            PATH="/Users/$REMOTE_USER/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" \
             codex --version
 
           echo
           echo "=================================================="
-          echo "RDP USER"
+          echo "TAILSCALE"
           echo "=================================================="
+          tailscale version
+          tailscale status
+          tailscale ip -4
 
-          id "$USERNAME"
+          echo
+          echo "=================================================="
+          echo "REMOTE USER"
+          echo "=================================================="
+          id "$REMOTE_USER"
+          sudo dscl . -read "/Users/$REMOTE_USER" NFSHomeDirectory UserShell
 
           echo
           echo "=================================================="
           echo "PATHS"
           echo "=================================================="
-
           ls -ld \
-            "$HOME_DIR" \
-            "$HOME_DIR/Desktop" \
-            "$HOME_DIR/Documents" \
-            "$HOME_DIR/Downloads" \
-            "$HOME_DIR/Projects" \
-            "$HOME_DIR/Code" \
-            "$HOME_DIR/.codex" \
+            "/Users/$REMOTE_USER" \
+            "/Users/$REMOTE_USER/Desktop" \
+            "/Users/$REMOTE_USER/Documents" \
+            "/Users/$REMOTE_USER/Downloads" \
+            "/Users/$REMOTE_USER/Projects" \
+            "/Users/$REMOTE_USER/Code" \
+            "/Users/$REMOTE_USER/.codex" \
             /workspace
 
           echo
           echo "=================================================="
-          echo "XRDP LOG"
+          echo "VNC"
           echo "=================================================="
-
-          sudo tail -n 100 \
-            /var/log/xrdp.log || true
-
-          echo
-          echo "=================================================="
-          echo "XRDP SESMAN LOG"
-          echo "=================================================="
-
-          sudo tail -n 150 \
-            /var/log/xrdp-sesman.log || true
-
-          echo
-          echo "=================================================="
-          echo "TCP TEST"
-          echo "=================================================="
-
-          nc -vz -w 5 \
-            "$TAILSCALE_IP" \
-            3389
-
-          echo
-          echo "=================================================="
-          echo "WORKSTATION VALIDATION COMPLETE"
-          echo "=================================================="
+          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || true
 
       # ============================================================
-      # 29. SHOW CONNECTION INFORMATION
+      # 17. SHOW CONNECTION INFORMATION
       # ============================================================
-      - name: Show RDP Access
+      - name: Show Remote Access Information
         shell: bash
         run: |
           echo
           echo "================================================================"
-          echo "                  UBUNTU WORKSTATION READY"
+          echo "                  macOS WORKSTATION READY"
           echo "================================================================"
           echo
-          echo "RDP HOST:"
-          echo "$TAILSCALE_IP:3389"
+          echo "OS:"
+          sw_vers -productName
+          sw_vers -productVersion
           echo
-          echo "USERNAME:"
-          echo "RDP"
+          echo "ARCHITECTURE:"
+          uname -m
           echo
-          echo "PASSWORD:"
-          echo "admin"
+          echo "REMOTE PROTOCOL:"
+          echo "VNC / macOS Screen Sharing"
           echo
-          echo "RDP SESSION:"
-          echo "Xorg"
+          echo "VNC HOST:"
+          echo "$TAILSCALE_IP:5900"
           echo
-          echo "DESKTOP:"
-          echo "LXDE + Openbox"
+          echo "MAC USERNAME:"
+          echo "$REMOTE_USER"
+          echo
+          echo "MAC PASSWORD:"
+          echo "$REMOTE_PASSWORD"
+          echo
+          echo "VNC PASSWORD:"
+          echo "$VNC_PASSWORD"
           echo
           echo "CHATGPT:"
-          echo "Launch 'ChatGPT' from the Applications menu"
-          echo "or run: chatgpt"
+          echo "/Applications/ChatGPT.app"
+          echo "Launch from Finder/Desktop after signing into the VNC session."
           echo
           echo "CODEX:"
           echo "codex"
@@ -1475,26 +739,25 @@ jobs:
           echo "/workspace"
           echo
           echo "PROJECTS:"
-          echo "/home/RDP/Projects"
+          echo "/Users/$REMOTE_USER/Projects"
           echo
           echo "CODE:"
-          echo "/home/RDP/Code"
+          echo "/Users/$REMOTE_USER/Code"
           echo
           echo "DOWNLOADS:"
-          echo "/home/RDP/Downloads"
+          echo "/Users/$REMOTE_USER/Downloads"
           echo
           echo "NETWORK:"
-          echo "Tailscale only"
+          echo "Tailscale"
           echo
-          echo "================================================================"
-          echo "Connect from Microsoft Remote Desktop:"
-          echo
-          echo "$TAILSCALE_IP:3389"
+          echo "IMPORTANT:"
+          echo "macOS does not expose an RDP server. Use a VNC client on the device"
+          echo "from which you want to control this Mac."
           echo
           echo "================================================================"
 
       # ============================================================
-      # 30. KEEP WORKSTATION ALIVE
+      # 18. KEEP WORKSTATION ALIVE
       # ============================================================
       - name: Keep Workstation Alive
         shell: bash
@@ -1506,43 +769,29 @@ jobs:
           echo "REMOTE WORKSTATION ACTIVE"
           echo "=================================================="
           echo
-          echo "GitHub-hosted runner maximum job duration: 360 minutes."
+          echo "GitHub-hosted macOS job maximum duration: 360 minutes."
+          echo "VNC: $TAILSCALE_IP:5900"
           echo
 
           while true; do
-
             NOW="$(date '+%Y-%m-%d %H:%M:%S')"
-
             echo "[$NOW] Workstation active"
 
-            # Keep xrdp alive.
-            if ! sudo systemctl is-active --quiet xrdp; then
-
-              echo "[$NOW] xrdp stopped. Restarting..."
-
-              sudo systemctl restart xrdp || true
-
-              echo
-              sudo systemctl \
-                --no-pager \
-                status xrdp || true
-
-              echo
-              sudo tail -n 100 \
-                /var/log/xrdp.log || true
-
-              echo
-              sudo tail -n 150 \
-                /var/log/xrdp-sesman.log || true
+            if ! tailscale status >/dev/null 2>&1; then
+              echo "[$NOW] Tailscale is not responding. Restarting service..."
+              sudo brew services restart tailscale || true
+              sleep 5
+              tailscale up \
+                --auth-key='${{ secrets.TAILSCALE_AUTH_KEY }}' \
+                --hostname="$TS_HOSTNAME" || true
             fi
 
-            # Keep Tailscale alive.
-            if ! sudo systemctl is-active --quiet tailscaled; then
-
-              echo "[$NOW] tailscaled stopped. Restarting..."
-
-              sudo systemctl restart tailscaled || true
-
+            if ! sudo lsof -nP -iTCP:5900 -sTCP:LISTEN >/dev/null 2>&1; then
+              echo "[$NOW] Screen Sharing is not listening on TCP 5900."
+              echo "[$NOW] Re-running Screen Sharing bootstrap..."
+              sudo launchctl enable system/com.apple.screensharing || true
+              sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+              sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
             fi
 
             sleep 30
