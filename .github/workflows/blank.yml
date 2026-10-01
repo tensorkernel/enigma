@@ -1,25 +1,14 @@
-name: macOS Latest Workstation VNC
+name: macOS Latest Screen Sharing
 
 on:
   workflow_dispatch:
 
 jobs:
   workstation:
-    # As of Oct 1, 2026, macos-latest points to the current macOS 26
-    # Apple-silicon GitHub-hosted image.
     runs-on: macos-latest
     timeout-minutes: 360
 
-    env:
-      REMOTE_USER: RDP
-      REMOTE_PASSWORD: admin
-      VNC_PASSWORD: admin
-      TS_HOSTNAME: gh-macos-workstation-${{ github.run_id }}
-
     steps:
-      # ============================================================
-      # 1. INSPECT RUNNER
-      # ============================================================
       - name: Inspect macOS Runner
         shell: bash
         run: |
@@ -45,16 +34,10 @@ jobs:
 
           echo
           echo "=================================================="
-          echo "GRAPHICS"
+          echo "XCODE"
           echo "=================================================="
-          system_profiler SPDisplaysDataType || true
-
-          echo
-          echo "=================================================="
-          echo "MEMORY"
-          echo "=================================================="
-          vm_stat
-          sysctl hw.memsize
+          xcodebuild -version || true
+          xcode-select -p
 
           echo
           echo "=================================================="
@@ -62,737 +45,90 @@ jobs:
           echo "=================================================="
           df -h /
 
-          echo
-          echo "=================================================="
-          echo "XCODE"
-          echo "=================================================="
-          xcodebuild -version || true
-          xcode-select -p
-
-      # ============================================================
-      # 2. SELECT CURRENT XCODE
-      # ============================================================
       - name: Select Current Xcode
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ -d "/Applications/Xcode_26.6.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          XCODE_APP="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -n 1)"
+
+          if [ -n "$XCODE_APP" ] && [ -d "$XCODE_APP/Contents/Developer" ]; then
+            sudo xcode-select -s "$XCODE_APP/Contents/Developer"
           fi
 
           xcodebuild -version
           xcode-select -p
 
-      # ============================================================
-      # 3. PREPARE HOMEBREW
-      # ============================================================
-      - name: Prepare Homebrew
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          brew --version
-          brew config
-          brew update
-
-      # ============================================================
-      # 4. DEVELOPER / SECURITY / MEDIA UTILITIES
-      # ============================================================
-      - name: Install Developer Utilities
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          brew install \
-            git-lfs \
-            jq \
-            yq \
-            ripgrep \
-            fd \
-            fzf \
-            wget \
-            aria2 \
-            tree \
-            tmux \
-            htop \
-            btop \
-            shellcheck \
-            direnv \
-            socat \
-            rsync \
-            p7zip \
-            xz \
-            zstd \
-            lz4 \
-            ffmpeg \
-            cmake \
-            ninja \
-            pkgconf \
-            autoconf \
-            automake \
-            libtool \
-            openssl@3 \
-            gnupg \
-            neovim \
-            vim \
-            nano \
-            ca-certificates \
-            tailscale \
-            pnpm \
-            bun \
-            go \
-            rust
-
-          git lfs install --system || true
-
-      # ============================================================
-      # 5. BROWSER + WEB DRIVER STACK
-      # ============================================================
-      - name: Install Browsers and Web Drivers
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          brew install chromedriver geckodriver
-          brew install --cask google-chrome firefox
-
-          echo
-          echo "=== BROWSERS ==="
-          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version || true
-          "/Applications/Firefox.app/Contents/MacOS/firefox" --version || true
-
-          echo
-          echo "=== WEB DRIVERS ==="
-          chromedriver --version || true
-          geckodriver --version || true
-
-      # ============================================================
-      # 6. GRAPHICS / METAL / VULKAN USERSPACE
-      # ============================================================
-      - name: Install Graphics Tools
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          brew install molten-vk vulkan-tools
-
-          echo
-          echo "=== METAL / DISPLAY ==="
-          system_profiler SPDisplaysDataType || true
-
-          echo
-          echo "=== VULKAN ==="
-          vulkaninfo --summary || true
-
-      # ============================================================
-      # 7. PYTHON / NODE VALIDATION
-      # ============================================================
-      - name: Prepare Language Runtimes
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "=== PYTHON ==="
-          python3 --version
-          python3 -m pip --version
-
-          echo
-          echo "=== NODE ==="
-          node --version
-          npm --version
-          pnpm --version
-          bun --version
-
-          echo
-          echo "=== GO ==="
-          go version
-
-          echo
-          echo "=== RUST ==="
-          rustc --version
-          cargo --version
-
-      # ============================================================
-      # 8. DOCKER CLIENT / OPTIONAL COLIMA
-      # ============================================================
-      - name: Prepare Container Tooling
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          brew install docker docker-compose colima
-
-          echo "=== DOCKER ==="
-          docker --version
-          docker compose version
-
-          echo "=== COLIMA ==="
-          colima version
-
-          # GitHub-hosted macOS runners may not expose nested
-          # virtualization reliably. Try, but do not fail the whole
-          # workstation when a VM cannot be started.
-          colima start --cpu 4 --memory 8 --disk 40 || true
-          docker info || true
-
-      # ============================================================
-      # 9. CREATE REMOTE GUI USER
-      # ============================================================
-      - name: Create Remote GUI User
+      - name: Enable macOS Screen Sharing
         shell: bash
         run: |
           set -euo pipefail
-
-          USERNAME="$REMOTE_USER"
-          PASSWORD="$REMOTE_PASSWORD"
-
-          if id "$USERNAME" >/dev/null 2>&1; then
-            echo "User already exists: $USERNAME"
-            sudo dscl . -passwd "/Users/$USERNAME" "$PASSWORD"
-          else
-            sudo sysadminctl \
-              -addUser "$USERNAME" \
-              -fullName "Remote Workstation" \
-              -password "$PASSWORD" \
-              -admin
-          fi
-
-          sudo dseditgroup -o edit -a "$USERNAME" -t user admin || true
-
-          # Create and own the primary workstation paths.
-          HOME_DIR="/Users/$USERNAME"
-          sudo mkdir -p \
-            "$HOME_DIR/Desktop" \
-            "$HOME_DIR/Documents" \
-            "$HOME_DIR/Downloads" \
-            "$HOME_DIR/Pictures" \
-            "$HOME_DIR/Videos" \
-            "$HOME_DIR/Music" \
-            "$HOME_DIR/Projects" \
-            "$HOME_DIR/Code" \
-            "$HOME_DIR/Work" \
-            "$HOME_DIR/Scratch" \
-            "$HOME_DIR/.local/bin" \
-            "$HOME_DIR/.local/share" \
-            "$HOME_DIR/.config" \
-            "$HOME_DIR/.cache" \
-            "$HOME_DIR/.codex" \
-            "$HOME_DIR/.npm" \
-            "$HOME_DIR/.cache/pip" \
-            "$HOME_DIR/.cache/codex" \
-            /workspace \
-            /opt/apps \
-            /opt/tools
-
-          sudo chown -R "$USERNAME:staff" "$HOME_DIR"
-          sudo chown "$USERNAME:staff" /workspace
-          sudo chmod 0755 /workspace /opt/apps /opt/tools
-
-          sudo chown "$USERNAME:staff" "$HOME_DIR"
-          sudo chmod 0755 "$HOME_DIR"
-
-          if [ ! -L "$HOME_DIR/workspace" ]; then
-            sudo -u "$USERNAME" ln -sfn /workspace "$HOME_DIR/workspace"
-          fi
-
-          echo
-          echo "=== REMOTE USER ==="
-          id "$USERNAME"
-          sudo dscl . -read "/Users/$USERNAME" NFSHomeDirectory UserShell
-
-      # ============================================================
-      # 10. USER SHELL / PATH
-      # ============================================================
-      - name: Configure Remote User Environment
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          USERNAME="$REMOTE_USER"
-          HOME_DIR="/Users/$USERNAME"
-
-          sudo -u "$USERNAME" tee "$HOME_DIR/.zshrc" >/dev/null <<'EOF_ZSH'
-          export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
-          export WORKSPACE="/workspace"
-          export PROJECTS="$HOME/Projects"
-          export CODE="$HOME/Code"
-          export CODEX_HOME="$HOME/.codex"
-          export XDG_CONFIG_HOME="$HOME/.config"
-          export XDG_CACHE_HOME="$HOME/.cache"
-          export XDG_DATA_HOME="$HOME/.local/share"
-          export EDITOR="${EDITOR:-nano}"
-          export VISUAL="${VISUAL:-nano}"
-
-          alias ll='ls -lah'
-          alias la='ls -A'
-          alias l='ls -CF'
-          EOF_ZSH
-
-          sudo -u "$USERNAME" tee "$HOME_DIR/.bashrc" >/dev/null <<'EOF_BASH'
-          export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
-          export WORKSPACE="/workspace"
-          export PROJECTS="$HOME/Projects"
-          export CODE="$HOME/Code"
-          export CODEX_HOME="$HOME/.codex"
-          export XDG_CONFIG_HOME="$HOME/.config"
-          export XDG_CACHE_HOME="$HOME/.cache"
-          export XDG_DATA_HOME="$HOME/.local/share"
-          export EDITOR="${EDITOR:-nano}"
-          export VISUAL="${VISUAL:-nano}"
-          EOF_BASH
-
-          sudo chown "$USERNAME:staff" "$HOME_DIR/.zshrc" "$HOME_DIR/.bashrc"
-
-      # ============================================================
-      # 11. ENABLE macOS SCREEN SHARING / VNC
-      #
-      # macOS does NOT provide xrdp. Its built-in remote-control
-      # service is Screen Sharing / VNC, normally TCP 5900.
-      # ============================================================
-      - name: Enable macOS Screen Sharing VNC
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          USERNAME="$REMOTE_USER"
-          PASSWORD="$REMOTE_PASSWORD"
-          VNC_PASSWORD_VALUE="$VNC_PASSWORD"
 
           KICKSTART="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
           SCREENSHARING_PLIST="/System/Library/LaunchDaemons/com.apple.screensharing.plist"
+          CURRENT_USER="$(stat -f '%Su' /dev/console)"
 
-          echo "=== Screen Sharing plist ==="
+          echo "Console user: $CURRENT_USER"
+
+          if [ "$CURRENT_USER" = "root" ] || [ -z "$CURRENT_USER" ]; then
+            echo "No normal console user is available on this runner."
+            exit 1
+          fi
+
           test -f "$SCREENSHARING_PLIST"
-          ls -l "$SCREENSHARING_PLIST"
 
-          # Start the system Screen Sharing launchd service. The
-          # bootstrap path is used first on current macOS; the legacy
-          # load path is a compatibility fallback.
           sudo launchctl enable system/com.apple.screensharing || true
           sudo launchctl bootstrap system "$SCREENSHARING_PLIST" 2>/dev/null || \
             sudo launchctl load -w "$SCREENSHARING_PLIST" 2>/dev/null || true
 
-          # Configure Remote Management/VNC access when kickstart is
-          # available on this runner image.
           if [ -x "$KICKSTART" ]; then
             sudo "$KICKSTART" \
               -activate \
               -configure \
               -access -on \
-              -users "$USERNAME" \
+              -users "$CURRENT_USER" \
               -privs -all \
-              -clientopts -setvnclegacy -vnclegacy yes \
-              -clientopts -setvncpw -vncpw "$VNC_PASSWORD_VALUE" \
               -restart -agent || true
           fi
 
-          # Ensure the launch daemon is loaded after configuration.
           sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
 
           echo
-          echo "=== Screen Sharing service ==="
+          echo "=================================================="
+          echo "SCREEN SHARING"
+          echo "=================================================="
           sudo launchctl print system/com.apple.screensharing 2>/dev/null | sed -n '1,80p' || true
 
           echo
-          echo "=== PORT 5900 ==="
-          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || true
-
-      # ============================================================
-      # 12. INSTALL OFFICIAL CHATGPT DESKTOP FOR macOS
-      # ============================================================
-      - name: Install Official ChatGPT Desktop
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          USERNAME="$REMOTE_USER"
-          HOME_DIR="/Users/$USERNAME"
-          DOWNLOAD_DIR="$HOME_DIR/Downloads"
-          DMG="$DOWNLOAD_DIR/ChatGPT.dmg"
-          MOUNT_POINT="/Volumes/ChatGPT Installer"
-
-          sudo -u "$USERNAME" mkdir -p "$DOWNLOAD_DIR"
-
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-delay 2 \
-            --connect-timeout 30 \
-            --output "$DMG" \
-            "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg"
-
-          echo "=== CHATGPT DMG ==="
-          file "$DMG"
-          shasum -a 256 "$DMG"
-
-          # Detach a stale mount from a previous retry, if present.
-          hdiutil detach "$MOUNT_POINT" -force 2>/dev/null || true
-
-          hdiutil attach "$DMG" \
-            -nobrowse \
-            -readonly \
-            -mountpoint "$MOUNT_POINT"
-
-          APP_SOURCE="$MOUNT_POINT/ChatGPT.app"
-          test -d "$APP_SOURCE"
-
-          sudo rm -rf /Applications/ChatGPT.app
-          sudo ditto "$APP_SOURCE" /Applications/ChatGPT.app
-
-          # Preserve Gatekeeper validation. Do not remove the quarantine
-          # attribute or bypass code-signing checks.
-          codesign --verify --deep --strict --verbose=2 /Applications/ChatGPT.app
-          spctl --assess --type execute --verbose=2 /Applications/ChatGPT.app
-
-          sudo chown -R root:wheel /Applications/ChatGPT.app
-          sudo chmod -R a+rX /Applications/ChatGPT.app
-
-          hdiutil detach "$MOUNT_POINT" -force
-          rm -f "$DMG"
-
-          # Desktop shortcut for the remote GUI user.
-          sudo -u "$USERNAME" ln -sfn /Applications/ChatGPT.app "$HOME_DIR/Desktop/ChatGPT.app"
-
-          echo
-          echo "=== CHATGPT APP ==="
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/ChatGPT.app/Contents/Info.plist || true
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Applications/ChatGPT.app/Contents/Info.plist || true
-          codesign -dv --verbose=4 /Applications/ChatGPT.app 2>&1 | sed -n '1,35p' || true
-
-      # ============================================================
-      # 13. INSTALL CODEX CLI
-      # ============================================================
-      - name: Install OpenAI Codex CLI
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          USERNAME="$REMOTE_USER"
-          HOME_DIR="/Users/$USERNAME"
-
-          sudo -u "$USERNAME" env \
-            HOME="$HOME_DIR" \
-            CODEX_HOME="$HOME_DIR/.codex" \
-            CODEX_INSTALL_DIR="$HOME_DIR/.local/bin" \
-            bash -lc 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
-
-          CODEX_BIN="$HOME_DIR/.local/bin/codex"
-
-          if [ ! -x "$CODEX_BIN" ]; then
-            CODEX_BIN="$(sudo -u "$USERNAME" env HOME="$HOME_DIR" bash -lc 'command -v codex 2>/dev/null || true')"
-          fi
-
-          if [ -z "$CODEX_BIN" ] || [ ! -x "$CODEX_BIN" ]; then
-            echo "ERROR: Codex CLI was not installed."
-            find "$HOME_DIR/.local" -maxdepth 4 -type f -name 'codex*' -print || true
-            exit 1
-          fi
-
-          sudo ln -sfn "$CODEX_BIN" /usr/local/bin/codex
-          sudo chown -R "$USERNAME:staff" "$HOME_DIR/.codex" "$HOME_DIR/.local" 2>/dev/null || true
-
-          echo "=== CODEX ==="
-          sudo -u "$USERNAME" env \
-            HOME="$HOME_DIR" \
-            CODEX_HOME="$HOME_DIR/.codex" \
-            PATH="$HOME_DIR/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" \
-            codex --version
-
-      # ============================================================
-      # 14. TAILSCALE CLI-ONLY DAEMON
-      #
-      # The Homebrew formula is used here instead of the GUI cask so
-      # the daemon can run unattended on a hosted/headless Mac.
-      # ============================================================
-      - name: Install and Start Tailscale
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          command -v tailscale
-          command -v tailscaled
-          tailscale version
-
-          sudo brew services start tailscale || true
-
-          # Give launchd a moment to bring up the daemon.
-          for i in $(seq 1 30); do
-            if tailscale status >/dev/null 2>&1; then
-              break
-            fi
-            sleep 2
-          done
-
-          test -n "${{ secrets.TAILSCALE_AUTH_KEY }}"
-
-          export TS_AUTH_KEY='${{ secrets.TAILSCALE_AUTH_KEY }}'
-
-          # Tailscale recommends environment-based auth-key handling so
-          # the secret is not placed literally in shell history.
-          tailscale up \
-            --auth-key="$TS_AUTH_KEY" \
-            --hostname="$TS_HOSTNAME"
-
-          unset TS_AUTH_KEY
-
-          echo
-          echo "=== TAILSCALE ==="
-          tailscale version
-          tailscale status
-          tailscale ip -4
-
-          TS_IP="$(tailscale ip -4 | head -n 1 | tr -d '\r\n')"
-          test -n "$TS_IP"
-          echo "TAILSCALE_IP=$TS_IP" >> "$GITHUB_ENV"
-
-      # ============================================================
-      # 15. REMOTE ACCESS VALIDATION
-      # ============================================================
-      - name: Validate VNC and Tailscale
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "=== TAILSCALE IP ==="
-          echo "$TAILSCALE_IP"
-
-          echo
-          echo "=== TAILSCALE INTERFACES ==="
-          ifconfig | grep -B2 -A6 -E '100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.' || true
-
-          echo
-          echo "=== VNC LISTENER ==="
-          for i in $(seq 1 30); do
-            if nc -z -w 2 127.0.0.1 5900 >/dev/null 2>&1; then
-              break
-            fi
-            echo "Waiting for Screen Sharing on TCP 5900... ($i/30)"
-            sleep 2
-          done
-
-          sudo lsof -nP -iTCP:5900 -sTCP:LISTEN
-
-          echo
-          echo "=== LOCAL TCP TEST ==="
-          nc -vz -w 5 127.0.0.1 5900
-
-          echo
-          echo "=== TAILSCALE TCP TEST ==="
-          nc -vz -w 5 "$TAILSCALE_IP" 5900 || true
-
-          echo
-          echo "=== SCREEN SHARING PLIST ==="
-          sudo launchctl print system/com.apple.screensharing 2>/dev/null | sed -n '1,120p' || true
-
-      # ============================================================
-      # 16. DEVELOPER TOOL VALIDATION
-      # ============================================================
-      - name: Validate Workstation
-        shell: bash
-        run: |
-          set -euxo pipefail
-
           echo "=================================================="
-          echo "MACOS"
-          echo "=================================================="
-          sw_vers
-          uname -a
-          uname -m
-
-          echo
-          echo "=================================================="
-          echo "XCODE"
-          echo "=================================================="
-          xcodebuild -version
-
-          echo
-          echo "=================================================="
-          echo "DEVELOPER TOOLS"
-          echo "=================================================="
-          git --version
-          git-lfs --version || true
-          gh --version | head -n 1 || true
-          node --version
-          npm --version
-          pnpm --version
-          bun --version
-          python3 --version
-          pip3 --version
-          clang --version | head -n 1
-          cmake --version | head -n 1
-          ninja --version
-          go version
-          rustc --version
-          cargo --version
-          docker --version
-          docker compose version
-          colima version
-
-          echo
-          echo "=================================================="
-          echo "BROWSERS"
-          echo "=================================================="
-          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version || true
-          "/Applications/Firefox.app/Contents/MacOS/firefox" --version || true
-          chromedriver --version || true
-          geckodriver --version || true
-
-          echo
-          echo "=================================================="
-          echo "CHATGPT"
-          echo "=================================================="
-          test -d /Applications/ChatGPT.app
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /Applications/ChatGPT.app/Contents/Info.plist || true
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/ChatGPT.app/Contents/Info.plist || true
-          codesign --verify --deep --strict /Applications/ChatGPT.app
-          spctl --assess --type execute /Applications/ChatGPT.app
-
-          echo
-          echo "=================================================="
-          echo "CODEX"
-          echo "=================================================="
-          command -v codex
-          sudo -u "$REMOTE_USER" env \
-            HOME="/Users/$REMOTE_USER" \
-            CODEX_HOME="/Users/$REMOTE_USER/.codex" \
-            PATH="/Users/$REMOTE_USER/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" \
-            codex --version
-
-          echo
-          echo "=================================================="
-          echo "TAILSCALE"
-          echo "=================================================="
-          tailscale version
-          tailscale status
-          tailscale ip -4
-
-          echo
-          echo "=================================================="
-          echo "REMOTE USER"
-          echo "=================================================="
-          id "$REMOTE_USER"
-          sudo dscl . -read "/Users/$REMOTE_USER" NFSHomeDirectory UserShell
-
-          echo
-          echo "=================================================="
-          echo "PATHS"
-          echo "=================================================="
-          ls -ld \
-            "/Users/$REMOTE_USER" \
-            "/Users/$REMOTE_USER/Desktop" \
-            "/Users/$REMOTE_USER/Documents" \
-            "/Users/$REMOTE_USER/Downloads" \
-            "/Users/$REMOTE_USER/Projects" \
-            "/Users/$REMOTE_USER/Code" \
-            "/Users/$REMOTE_USER/.codex" \
-            /workspace
-
-          echo
-          echo "=================================================="
-          echo "VNC"
+          echo "VNC LISTENER"
           echo "=================================================="
           sudo lsof -nP -iTCP:5900 -sTCP:LISTEN || true
 
-      # ============================================================
-      # 17. SHOW CONNECTION INFORMATION
-      # ============================================================
       - name: Show Remote Access Information
         shell: bash
         run: |
           echo
-          echo "================================================================"
-          echo "                  macOS WORKSTATION READY"
-          echo "================================================================"
-          echo
-          echo "OS:"
-          sw_vers -productName
-          sw_vers -productVersion
+          echo "=================================================="
+          echo "macOS RUNNER"
+          echo "=================================================="
+          sw_vers
           echo
           echo "ARCHITECTURE:"
           uname -m
           echo
           echo "REMOTE PROTOCOL:"
-          echo "VNC / macOS Screen Sharing"
+          echo "macOS Screen Sharing / VNC"
           echo
-          echo "VNC HOST:"
-          echo "$TAILSCALE_IP:5900"
+          echo "LISTENER:"
+          echo "TCP 5900"
           echo
-          echo "MAC USERNAME:"
-          echo "$REMOTE_USER"
+          echo "AUTHENTICATION:"
+          echo "Use the macOS console user's credentials."
           echo
-          echo "MAC PASSWORD:"
-          echo "$REMOTE_PASSWORD"
-          echo
-          echo "VNC PASSWORD:"
-          echo "$VNC_PASSWORD"
-          echo
-          echo "CHATGPT:"
-          echo "/Applications/ChatGPT.app"
-          echo "Launch from Finder/Desktop after signing into the VNC session."
-          echo
-          echo "CODEX:"
-          echo "codex"
-          echo
-          echo "WORKSPACE:"
-          echo "/workspace"
-          echo
-          echo "PROJECTS:"
-          echo "/Users/$REMOTE_USER/Projects"
-          echo
-          echo "CODE:"
-          echo "/Users/$REMOTE_USER/Code"
-          echo
-          echo "DOWNLOADS:"
-          echo "/Users/$REMOTE_USER/Downloads"
-          echo
-          echo "NETWORK:"
-          echo "Tailscale"
-          echo
-          echo "IMPORTANT:"
-          echo "macOS does not expose an RDP server. Use a VNC client on the device"
-          echo "from which you want to control this Mac."
-          echo
-          echo "================================================================"
-
-      # ============================================================
-      # 18. KEEP WORKSTATION ALIVE
-      # ============================================================
-      - name: Keep Workstation Alive
-        shell: bash
-        run: |
-          set -u
-
+          echo "NOTE:"
+          echo "macOS does not provide a native RDP server."
+          echo "This workflow does not install an RDP server, third-party RDP software,"
+          echo "Tailscale, a separate remote user, or a fixed remote password."
           echo
           echo "=================================================="
-          echo "REMOTE WORKSTATION ACTIVE"
-          echo "=================================================="
-          echo
-          echo "GitHub-hosted macOS job maximum duration: 360 minutes."
-          echo "VNC: $TAILSCALE_IP:5900"
-          echo
-
-          while true; do
-            NOW="$(date '+%Y-%m-%d %H:%M:%S')"
-            echo "[$NOW] Workstation active"
-
-            if ! tailscale status >/dev/null 2>&1; then
-              echo "[$NOW] Tailscale is not responding. Restarting service..."
-              sudo brew services restart tailscale || true
-              sleep 5
-              tailscale up \
-                --auth-key='${{ secrets.TAILSCALE_AUTH_KEY }}' \
-                --hostname="$TS_HOSTNAME" || true
-            fi
-
-            if ! sudo lsof -nP -iTCP:5900 -sTCP:LISTEN >/dev/null 2>&1; then
-              echo "[$NOW] Screen Sharing is not listening on TCP 5900."
-              echo "[$NOW] Re-running Screen Sharing bootstrap..."
-              sudo launchctl enable system/com.apple.screensharing || true
-              sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
-              sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
-            fi
-
-            sleep 30
-          done
